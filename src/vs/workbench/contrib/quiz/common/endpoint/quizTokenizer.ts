@@ -5,7 +5,7 @@
 
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { Disposable } from '../../../../../base/common/lifecycle.js';
-import { IQuizTokenizer, IQuizTokenBudget, IQuizTokenUsage, QuizTokenizerType } from '../quizTypes.js';
+import { IQuizTokenizer, IQuizTokenBudget, QuizTokenizerType } from '../quizTypes.js';
 import { IQuizPromptMessage } from '../intents/quizIntents.js';
 
 // #region QuizTokenizerImpl (aligned with Copilot's ITokenizer)
@@ -41,10 +41,10 @@ export class QuizServiceTokenizer extends Disposable implements IQuizTokenizer {
 
 	constructor(
 		private readonly _computeTokenLength: (text: string, token: CancellationToken) => Promise<number>,
-		private readonly _tokenizerType: QuizTokenizerType = QuizTokenizerType.O200K,
+		tokenizerType: QuizTokenizerType = QuizTokenizerType.O200K,
 	) {
 		super();
-		this.type = _tokenizerType;
+		this.type = tokenizerType;
 	}
 
 	async countTokens(text: string, token: CancellationToken): Promise<number> {

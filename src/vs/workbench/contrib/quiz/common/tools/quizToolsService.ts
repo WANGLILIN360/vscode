@@ -223,7 +223,7 @@ export interface IQuizToolsService {
 	 * Returns a validation result with either the parsed input or an error.
 	 * Aligned with Copilot's IToolsService.validateToolInput().
 	 */
-	validateToolInput(toolId: string, input: string): IQuizToolValidationResult;
+	validateToolInput(toolId: string, input: string): Promise<IQuizToolValidationResult>;
 
 	/**
 	 * Validate a tool name, returning a sanitized version if invalid.
@@ -269,39 +269,176 @@ export interface IQuizToolSchemaNormalizer {
 }
 
 export class QuizToolSchemaNormalizer implements IQuizToolSchemaNormalizer {
-	normalize(schema: IQuizToolDefinition, modelFamily: string): IQuizToolDefinition {
-		// Anthropic requires `additionalProperties: false` on all objects
-		if (modelFamily === 'anthropic' || modelFamily === 'claude') {
-			return this._addAdditionalPropertiesFalse(schema);
-		}
-		return schema;
-	}
 
-	private _addAdditionalPropertiesFalse(schema: IQuizToolDefinition): IQuizToolDefinition {
+	// --- GPT-4o unsupported schema keywords (aligned with Copilot's gpt4oUnsupportedSchemaKeywords)
+	private static readonly _gpt4oUnsupportedSchemaKeywords = new Set([
+		'minLength', 'maxLength', 'pattern', 'default', 'format',
+		'minimum', 'maximum', 'multipleOf', 'patternProperties',
+		'unevaluatedProperties', 'propertyNames', 'minProperties',
+		'maxProperties', 'unevaluatedItems', 'contains', 'minContains',
+		'maxContains', 'minItems', 'maxItems', 'uniqueItems',
+	]);
+
+	// --- GPT-4o max description length
+	private static readonly _gpt4oMaxStringLength = 1024;
+
+	normalize(schema: IQuizToolDefinition, modelFamily: string): IQuizToolDefinition {
+		const normalizedFamily = modelFamily.toLowerCase();
+
+		// Deep-clone the input schema so mutations don't affect the original
 		const inputSchema = schema.inputSchema as Record<string, unknown> | undefined;
 		if (!inputSchema) {
 			return schema;
 		}
-		const normalized = this._deepAddAdditionalPropertiesFalse(inputSchema);
-		return { ...schema, inputSchema: normalized };
+		const cloned: Record<string, unknown> = JSON.parse(JSON.stringify(inputSchema));
+
+		// --- fn-level rules (aligned with Copilot's fnRules) ---
+
+		// Rule: parameters must be an object with properties if present
+		if (cloned && cloned.type !== 'object') {
+			// Force to object schema
+			cloned.type = 'object';
+			cloned.properties = cloned.properties ?? {};
+		}
+		if (cloned.type === 'object' && !cloned.properties) {
+			cloned.properties = {};
+		}
+
+		// Rule: description must not be empty
+		if (!schema.description) {
+			(schema as { description?: string }).description = 'No description provided';
+		}
+
+		// --- jsonSchema-level rules (aligned with Copilot's jsonSchemaRules) ---
+
+		// Rule: array type must have items
+		this._forEachSchemaNode(cloned, n => {
+			if (n && n.type === 'array' && !n.items) {
+				throw new Error('tool parameters array type must have items');
+			}
+		});
+
+		// Rule: GPT-4 — truncate long descriptions
+		if (this._isGpt4ish(normalizedFamily)) {
+			this._forEachSchemaNode(cloned, n => {
+				if (n && typeof n.description === 'string' && n.description.length > QuizToolSchemaNormalizer._gpt4oMaxStringLength) {
+					n.description = n.description.substring(0, QuizToolSchemaNormalizer._gpt4oMaxStringLength);
+				}
+			});
+		}
+
+		// Rule: GPT-4 — remove unsupported schema keywords
+		if (this._isGpt4ish(normalizedFamily)) {
+			this._forEachSchemaNode(cloned, n => {
+				if (n && typeof n === 'object') {
+					for (const key of Object.keys(n)) {
+						if (QuizToolSchemaNormalizer._gpt4oUnsupportedSchemaKeywords.has(key)) {
+							delete n[key];
+						}
+					}
+				}
+			});
+		}
+
+		// Rule: remove unsupported top-level schema keywords (validated fails for both Claude and 4o)
+		const unsupported = ['oneOf', 'anyOf', 'allOf', 'not', 'if', 'then', 'else'];
+		for (const key of unsupported) {
+			if (Object.prototype.hasOwnProperty.call(cloned, key)) {
+				delete (cloned as Record<string, unknown>)[key];
+			}
+		}
+
+		// Rule: filter required properties to only those that exist in properties
+		this._forEachSchemaNode(cloned, n => {
+			if (n && n.type === 'object' && n.properties && typeof n.properties === 'object' && Array.isArray(n.required)) {
+				const props = n.properties as Record<string, unknown>;
+				n.required = n.required.filter((key: string) => props[key] !== undefined);
+			}
+		});
+
+		// Rule: Draft 2020-12 — array items as array → convert to anyOf
+		if (this._isDraft2020_12(normalizedFamily)) {
+			this._forEachSchemaNode(cloned, n => {
+				if (n && n.type === 'array' && Array.isArray(n.items)) {
+					n.items = { anyOf: n.items };
+				}
+			});
+		}
+
+		// Rule: Anthropic — add additionalProperties: false on all objects
+		if (normalizedFamily === 'anthropic' || normalizedFamily.startsWith('claude')) {
+			this._forEachSchemaNode(cloned, n => {
+				if (n && n.type === 'object' && !Object.prototype.hasOwnProperty.call(n, 'additionalProperties')) {
+					n.additionalProperties = false;
+				}
+			});
+		}
+
+		// Rule: Gemini — remove $defs/definitions, additionalProperties, convert nullable types
+		if (normalizedFamily.startsWith('gemini')) {
+			this._forEachSchemaNode(cloned, n => {
+				if (n && typeof n === 'object') {
+					delete n.$defs;
+					delete n.definitions;
+					delete n.additionalProperties;
+				}
+				// Convert ["string", "null"] → { type: "string", nullable: true }
+				if (n && typeof n === 'object' && Array.isArray(n.type)) {
+					const types = n.type as string[];
+					const hasNull = types.includes('null');
+					const nonNullTypes = types.filter(t => t !== 'null');
+					if (hasNull && nonNullTypes.length === 1) {
+						n.type = nonNullTypes[0];
+						n.nullable = true;
+					} else if (hasNull && nonNullTypes.length > 1) {
+						n.type = nonNullTypes;
+					}
+				}
+			});
+		}
+
+		return { ...schema, inputSchema: cloned };
 	}
 
-	private _deepAddAdditionalPropertiesFalse(obj: Record<string, unknown>): Record<string, unknown> {
-		const result: Record<string, unknown> = {};
-		for (const [key, value] of Object.entries(obj)) {
-			if (key === 'additionalProperties') {
-				continue; // don't overwrite existing
-			}
-			if (value && typeof value === 'object' && !Array.isArray(value) && (value as Record<string, unknown>).type === 'object') {
-				result[key] = this._deepAddAdditionalPropertiesFalse(value as Record<string, unknown>);
-			} else {
-				result[key] = value;
+	// --- Helpers (aligned with Copilot's forEachSchemaNode, isGpt4ish, isDraft2020_12) ---
+
+	private _forEachSchemaNode(input: Record<string, unknown>, fn: (node: Record<string, unknown>) => void): void {
+		if (!input || typeof input !== 'object') {
+			return;
+		}
+		fn(input);
+		const children: (unknown | unknown[])[] = [
+			input.properties ? Object.values(input.properties as Record<string, unknown>) : undefined,
+			input.items ? (Array.isArray(input.items) ? input.items : [input.items]) : undefined,
+			input.dependencies ? Object.values(input.dependencies as Record<string, unknown>) : undefined,
+			input.patternProperties ? Object.values(input.patternProperties as Record<string, unknown>) : undefined,
+			input.additionalProperties ? [input.additionalProperties] : undefined,
+			input.anyOf ?? undefined,
+			input.allOf ?? undefined,
+			input.oneOf ?? undefined,
+			input.not ?? undefined,
+			input.if ?? undefined,
+			input.then ?? undefined,
+			input.else ?? undefined,
+			input.contains ?? undefined,
+		];
+		for (const child of children) {
+			if (child === undefined) { continue; }
+			const arr = Array.isArray(child) ? child : [child];
+			for (const value of arr) {
+				if (value && typeof value === 'object') {
+					this._forEachSchemaNode(value as Record<string, unknown>, fn);
+				}
 			}
 		}
-		if (obj.type === 'object' && !Object.prototype.hasOwnProperty.call(obj, 'additionalProperties')) {
-			result['additionalProperties'] = false;
-		}
-		return result;
+	}
+
+	private _isGpt4ish(family: string): boolean {
+		return family.startsWith('gpt-4');
+	}
+
+	private _isDraft2020_12(family: string): boolean {
+		return family.startsWith('gpt-4') || family.startsWith('claude-') || family.startsWith('o4');
 	}
 }
 
@@ -386,7 +523,7 @@ export class NullQuizToolsService implements IQuizToolsService {
 		throw new Error('NullQuizToolsService: no tools available');
 	}
 
-	validateToolInput(_toolId: string, _input: string): IQuizToolValidationResult { return { inputObj: {} }; }
+	validateToolInput(_toolId: string, _input: string): Promise<IQuizToolValidationResult> { return Promise.resolve({ inputObj: {} }); }
 	validateToolName(name: string): string | undefined { return name; }
 }
 

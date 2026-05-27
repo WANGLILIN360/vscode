@@ -116,6 +116,44 @@ export class QuizModelCapabilities implements IQuizModelCapabilities {
 	static fromMetadata(modelId: string, metadata: ILanguageModelChatMetadata): QuizModelCapabilities {
 		const family = metadata.family ?? '';
 		const tokenizerType = inferTokenizerType(metadata.vendor, family);
+		const normalizedId = normalizeForMatch(modelId);
+		const normalizedFamily = normalizeForMatch(family);
+
+		// Infer capabilities from model family patterns
+		// Aligned with Copilot's chatModelCapabilities.ts
+		const isAnthropic = isQuizAnthropicFamily(family);
+		const isGemini = isQuizGeminiFamily(family);
+
+		// Thinking/reasoning: Anthropic Claude 3.5+ and OpenAI o1/o3/o4 support thinking
+		const supportsThinkingContentInHistory = isAnthropic
+			|| family.startsWith('o1') || family.startsWith('o3') || family.startsWith('o4');
+		const supportsAdaptiveThinking = isAnthropic && (
+			normalizedFamily.startsWith('claude-3-5') ||
+			normalizedFamily.startsWith('claude-3-7') ||
+			normalizedFamily.startsWith('claude-4') ||
+			normalizedFamily.startsWith('claude-sonnet-4') ||
+			normalizedFamily.startsWith('claude-opus-4')
+		);
+		const minThinkingBudget = supportsAdaptiveThinking ? 1024 : undefined;
+		const maxThinkingBudget = supportsAdaptiveThinking ? 16000 : undefined;
+		const supportsReasoningEffort = (family.startsWith('o1') || family.startsWith('o3') || family.startsWith('o4'))
+			? ['low', 'medium', 'high'] as readonly string[]
+			: undefined;
+
+		// Tool search: Claude Sonnet 4.5+/Opus 4.5+ and GPT-5.4/5.5
+		const supportsToolSearch = quizModelSupportsToolSearch(normalizedId, normalizedFamily);
+
+		// Context editing: Claude Haiku 4.5, Sonnet 4/4.5/4.6, Opus 4/4.1/4.5/4.6
+		const supportsContextEditing = quizModelSupportsContextEditing(normalizedId, normalizedFamily);
+
+		// Prediction: GPT-4o and newer OpenAI models
+		const supportsPrediction = family.startsWith('gpt-4o') || family.startsWith('gpt-5') || family.startsWith('o1') || family.startsWith('o3') || family.startsWith('o4');
+
+		// Edit tools: infer from family if not provided by metadata
+		const supportedEditTools = metadata.capabilities?.editTools ?? inferEditTools(family, isAnthropic, isGemini);
+
+		// Image limits: Anthropic 20, Gemini 10
+		const maxPromptImages = isAnthropic ? 20 : isGemini ? 10 : undefined;
 
 		return new QuizModelCapabilities(
 			modelId,
@@ -125,18 +163,18 @@ export class QuizModelCapabilities implements IQuizModelCapabilities {
 			metadata.capabilities?.toolCalling ?? false,
 			metadata.capabilities?.vision ?? false,
 			typeof metadata.capabilities?.agentMode === 'undefined' || metadata.capabilities.agentMode,
-			false, // supportsPrediction — not exposed by ILanguageModelChatMetadata
-			false, // supportsThinkingContentInHistory — not exposed by ILanguageModelChatMetadata
-			false, // supportsAdaptiveThinking — not exposed by ILanguageModelChatMetadata
-			undefined, // minThinkingBudget — not exposed
-			undefined, // maxThinkingBudget — not exposed
-			undefined, // supportsReasoningEffort — not exposed
-			false, // supportsToolSearch — not exposed
-			false, // supportsContextEditing — not exposed
+			supportsPrediction,
+			supportsThinkingContentInHistory,
+			supportsAdaptiveThinking,
+			minThinkingBudget,
+			maxThinkingBudget,
+			supportsReasoningEffort,
+			supportsToolSearch,
+			supportsContextEditing,
 			metadata.maxOutputTokens ?? 4096,
 			metadata.maxInputTokens ?? 128000,
-			undefined, // maxPromptImages — not exposed
-			metadata.capabilities?.editTools,
+			maxPromptImages,
+			supportedEditTools,
 			tokenizerType,
 			undefined, // isPremium — not exposed
 			undefined, // priceCategory — not exposed
@@ -173,6 +211,111 @@ export class QuizModelCapabilities implements IQuizModelCapabilities {
 	supportsEditTool(editToolName: string): boolean {
 		return !!this.supportedEditTools?.includes(editToolName);
 	}
+}
+
+// #endregion
+
+// #region Family-based capability inference (aligned with Copilot's chatModelCapabilities.ts)
+
+/**
+ * Normalize a model id or family string for matching.
+ * Replaces dots with dashes and lowercases for consistent prefix matching.
+ */
+function normalizeForMatch(s: string): string {
+	return s.toLowerCase().replace(/\./g, '-');
+}
+
+/**
+ * Check if a model family belongs to Anthropic/Claude.
+ * Aligned with Copilot's isAnthropicFamily.
+ */
+export function isQuizAnthropicFamily(family: string): boolean {
+	return family.startsWith('claude') || family.startsWith('Anthropic');
+}
+
+/**
+ * Check if a model family belongs to Gemini.
+ * Aligned with Copilot's isGeminiFamily.
+ */
+export function isQuizGeminiFamily(family: string): boolean {
+	return family.toLowerCase().startsWith('gemini');
+}
+
+/**
+ * Check if a model supports tool search.
+ * Aligned with Copilot's modelSupportsToolSearch.
+ *
+ * Supported: Claude Sonnet 4.5+/4.6, Opus 4.5+/4.6+/4.7, GPT-5.4/5.5
+ */
+export function quizModelSupportsToolSearch(normalizedId: string, normalizedFamily: string): boolean {
+	const matches = (n: string) =>
+		n === 'gpt-5-4' ||
+		n === 'gpt-5-5' ||
+		n.startsWith('claude-sonnet-4-5') ||
+		n.startsWith('claude-sonnet-4-6') ||
+		n.startsWith('claude-opus-4-5') ||
+		n.startsWith('claude-opus-4-6') ||
+		n.startsWith('claude-opus-4-7');
+	return matches(normalizedId) || matches(normalizedFamily);
+}
+
+/**
+ * Check if a model supports context editing (Anthropic context management).
+ * Aligned with Copilot's modelSupportsContextEditing.
+ *
+ * Supported: Claude Haiku 4.5, Sonnet 4/4.5/4.6, Opus 4/4.1/4.5/4.6
+ * Not supported: 1M context variants
+ */
+export function quizModelSupportsContextEditing(normalizedId: string, normalizedFamily: string): boolean {
+	// 1M context variant doesn't need context editing
+	if (normalizedId.includes('1m') || normalizedFamily.includes('1m')) {
+		return false;
+	}
+	const matches = (n: string) =>
+		n.startsWith('claude-haiku-4-5') ||
+		n.startsWith('claude-sonnet-4-6') ||
+		n.startsWith('claude-sonnet-4-5') ||
+		n.startsWith('claude-sonnet-4') ||
+		n.startsWith('claude-opus-4-6') ||
+		n.startsWith('claude-opus-4-5') ||
+		n.startsWith('claude-opus-4-1') ||
+		n.startsWith('claude-opus-4');
+	return matches(normalizedId) || matches(normalizedFamily);
+}
+
+/**
+ * Infer supported edit tools from model family.
+ * Aligned with Copilot's modelSupportsApplyPatch / modelSupportsReplaceString / modelSupportsMultiReplaceString.
+ */
+function inferEditTools(family: string, isAnthropic: boolean, isGemini: boolean): string[] | undefined {
+	const tools: string[] = [];
+
+	// Anthropic: multi_replace_string_in_file (primary) + insert_edit_into_file
+	if (isAnthropic) {
+		tools.push('multi_replace_string_in_file', 'insert_edit_into_file');
+	}
+	// Gemini: replace_string_in_file (primary) + insert_edit_into_file
+	else if (isGemini) {
+		tools.push('replace_string_in_file', 'insert_edit_into_file');
+	}
+	// OpenAI GPT (non-4o): apply_patch
+	else if (family.startsWith('gpt') && !family.includes('gpt-4o')) {
+		tools.push('apply_patch');
+	}
+	// OpenAI o4-mini: apply_patch
+	else if (family === 'o4-mini') {
+		tools.push('apply_patch');
+	}
+	// GPT-5.x family: apply_patch
+	else if (family.startsWith('gpt-5')) {
+		tools.push('apply_patch');
+	}
+	// Default: insert_edit_into_file as fallback
+	else {
+		tools.push('insert_edit_into_file');
+	}
+
+	return tools.length > 0 ? tools : undefined;
 }
 
 // #endregion

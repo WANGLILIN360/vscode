@@ -7,7 +7,7 @@ import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { Emitter } from '../../../../../base/common/event.js';
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { ILogService } from '../../../../../platform/log/common/log.js';
-import { ILanguageModelsService, IChatMessage, ChatMessageRole, IChatMessageTextPart, IChatMessageToolResultPart, IChatResponseTextPart, IChatResponseToolUsePart, IChatResponseThinkingPart, ILanguageModelChatMetadata, ILanguageModelChatSelector } from '../../../chat/common/languageModels.js';
+import { ILanguageModelsService, IChatMessage, ChatMessageRole, IChatMessageTextPart, IChatMessageToolResultPart, IChatMessageImagePart, IChatResponsePart, IChatResponseTextPart, IChatResponseToolUsePart, IChatResponseThinkingPart, ILanguageModelChatMetadata, ILanguageModelChatSelector } from '../../../chat/common/languageModels.js';
 import { IQuizEndpoint, IQuizEndpointProvider, IQuizChatRequestOptions, IQuizEndpointBody, IQuizResponseDelta } from '../../common/endpoint/quizEndpoint.js';
 import { IQuizIntentEndpoint, IQuizPromptMessage, IQuizToolCall, IQuizThinkingDelta } from '../../common/intents/quizIntents.js';
 import { QuizModelCapabilities, IQuizModelCapabilities } from '../../common/endpoint/quizModelCapabilities.js';
@@ -127,21 +127,21 @@ export class QuizLanguageModelEndpoint extends Disposable implements IQuizEndpoi
 
 	get supportsToolCalls(): boolean { return this._capabilities.supportsToolCalls; }
 	get supportsVision(): boolean { return this._capabilities.supportsVision; }
-	get supportsPrediction(): boolean { return false; }
+	get supportsPrediction(): boolean { return this._capabilities.supportsPrediction; }
 	get supportsThinkingContentInHistory(): boolean { return this._capabilities.supportsThinkingContentInHistory; }
 	get supportsAdaptiveThinking(): boolean { return this._capabilities.supportsAdaptiveThinking; }
-	get minThinkingBudget(): number | undefined { return undefined; }
-	get maxThinkingBudget(): number | undefined { return undefined; }
-	get supportsReasoningEffort(): readonly string[] | undefined { return undefined; }
-	get supportsToolSearch(): boolean { return false; }
-	get supportsContextEditing(): boolean { return false; }
+	get minThinkingBudget(): number | undefined { return this._capabilities.minThinkingBudget; }
+	get maxThinkingBudget(): number | undefined { return this._capabilities.maxThinkingBudget; }
+	get supportsReasoningEffort(): readonly string[] | undefined { return this._capabilities.supportsReasoningEffort; }
+	get supportsToolSearch(): boolean { return this._capabilities.supportsToolSearch; }
+	get supportsContextEditing(): boolean { return this._capabilities.supportsContextEditing; }
 	get supportedEditTools(): readonly string[] | undefined { return this._capabilities.supportedEditTools; }
 
 	// --- Token limits (aligned with Copilot's IEndpoint.modelMaxPromptTokens + IChatEndpoint.maxOutputTokens)
 
 	get modelMaxPromptTokens(): number { return this._capabilities.maxInputTokens; }
 	get maxOutputTokens(): number { return this._capabilities.maxOutputTokens; }
-	get maxPromptImages(): number | undefined { return undefined; }
+	get maxPromptImages(): number | undefined { return this._capabilities.maxPromptImages; }
 
 	// --- Pricing (aligned with Copilot's IChatEndpointTokenPricing)
 
@@ -161,34 +161,42 @@ export class QuizLanguageModelEndpoint extends Disposable implements IQuizEndpoi
 	 * Send a chat request to the model with full options.
 	 * Aligned with Copilot's makeChatRequest2.
 	 * Converts Quiz request options to ILanguageModelsService request options.
+	 * Includes stateful marker retry and image limit filtering.
 	 */
 	async *sendChatRequest(
 		messages: readonly IQuizPromptMessage[],
 		options: IQuizChatRequestOptions,
 		token: CancellationToken,
 	): AsyncIterable<IQuizResponseDelta> {
-		const chatMessages = quizPromptMessagesToChatMessages(messages);
+		// Convert prompt messages to chat messages (includes image filtering)
+		const chatMessages = quizPromptMessagesToChatMessages(messages, this._capabilities.maxPromptImages);
 		const requestOptions = this._buildLanguageModelsRequestOptions(options);
 
 		this._logService.debug(`[QuizEndpoint] Sending request to model ${this.modelId} with ${messages.length} messages, debugName=${options.debugName}`);
 
-		let response: Awaited<ReturnType<ILanguageModelsService['sendChatRequest']>>;
-		try {
-			response = await this._languageModelsService.sendChatRequest(
-				this.modelId,
-				undefined, // from — not an extension
-				chatMessages,
-				requestOptions,
-				token,
-			);
-		} catch (err) {
-			this._logService.error(`[QuizEndpoint] Model request failed: ${String(err)}`);
-			throw err;
+		// First attempt
+		let streamResult = await this._sendRequest(chatMessages, requestOptions, token);
+
+		// Stateful marker retry: if the response indicates an invalid stateful marker,
+		// retry without the previous_response_id (aligned with Copilot's makeChatRequest2)
+		if (streamResult.type === 'invalidStatefulMarker') {
+			this._logService.debug(`[QuizEndpoint] Invalid stateful marker, retrying without previousResponseId`);
+			delete requestOptions.previousResponseId;
+			streamResult = await this._sendRequest(chatMessages, requestOptions, token);
 		}
 
+		if (streamResult.type === 'error') {
+			throw streamResult.error;
+		}
+
+		// After handling error and invalidStatefulMarker, streamResult must be success
+		if (streamResult.type !== 'success') {
+			throw new Error('Unexpected stream result state');
+		}
+		const stream = streamResult.stream;
 		const toolCalls: IQuizToolCall[] = [];
 
-		for await (const partOrArray of response.stream) {
+		for await (const partOrArray of stream) {
 			const parts = Array.isArray(partOrArray) ? partOrArray : [partOrArray];
 			for (const part of parts) {
 				if (part.type === 'text') {
@@ -219,6 +227,41 @@ export class QuizLanguageModelEndpoint extends Disposable implements IQuizEndpoi
 			yield { toolCalls, finishReason: 'tool_calls' };
 		} else {
 			yield { finishReason: 'stop' };
+		}
+	}
+
+	/**
+	 * Send the actual request to ILanguageModelsService.
+	 * Returns a discriminated union to support stateful marker retry.
+	 */
+	private async _sendRequest(
+		chatMessages: IChatMessage[],
+		requestOptions: Record<string, unknown>,
+		token: CancellationToken,
+	): Promise<{ type: 'success'; stream: AsyncIterable<IChatResponsePart | IChatResponsePart[]> } | { type: 'invalidStatefulMarker' } | { type: 'error'; error: Error }> {
+		try {
+			const response = await this._languageModelsService.sendChatRequest(
+				this.modelId,
+				undefined, // from — not an extension
+				chatMessages,
+				requestOptions,
+				token,
+			);
+
+			// Check for invalid stateful marker in the response
+			// ILanguageModelsService doesn't expose this directly, but we can detect
+			// it from the response. For now, we assume success and let the stream
+			// processing handle any errors.
+			return { type: 'success', stream: response.stream };
+		} catch (err) {
+			// Detect invalid stateful marker errors from the model API
+			// The error message pattern varies by provider but typically contains
+			// "invalid_stateful_marker" or "previous_response_id"
+			const errMsg = String(err);
+			if (errMsg.includes('invalid_stateful_marker') || errMsg.includes('previous_response_id')) {
+				return { type: 'invalidStatefulMarker' };
+			}
+			return { type: 'error', error: err instanceof Error ? err : new Error(errMsg) };
 		}
 	}
 
@@ -375,14 +418,15 @@ class QuizLanguageModelEndpointWithTokenOverride implements IQuizEndpoint {
 /**
  * Convert Quiz's IQuizPromptMessage[] to VS Code's IChatMessage[].
  */
-export function quizPromptMessagesToChatMessages(messages: readonly IQuizPromptMessage[]): IChatMessage[] {
+export function quizPromptMessagesToChatMessages(messages: readonly IQuizPromptMessage[], imageLimit?: number): IChatMessage[] {
+	let imageCount = 0;
 	return messages.map(msg => {
 		const role = msg.role === 'assistant' ? ChatMessageRole.Assistant
 			: msg.role === 'system' ? ChatMessageRole.System
 				: msg.role === 'tool' ? ChatMessageRole.User
 					: ChatMessageRole.User;
 
-		const content: (IChatMessageTextPart | IChatResponseToolUsePart | IChatMessageToolResultPart)[] = [];
+		const content: (IChatMessageTextPart | IChatResponseToolUsePart | IChatMessageToolResultPart | IChatMessageImagePart)[] = [];
 
 		if (typeof msg.content === 'string') {
 			content.push({ type: 'text', value: msg.content });
@@ -409,7 +453,18 @@ export function quizPromptMessagesToChatMessages(messages: readonly IQuizPromptM
 			}
 		}
 
-		return { role, content, name: msg.toolName };
+		// Filter images if the model has a known limit (aligned with Copilot's filterHistoryImages)
+		const filteredContent = imageLimit
+			? content.filter(part => {
+				if (part.type === 'image_url') {
+					imageCount++;
+					return imageCount <= imageLimit;
+				}
+				return true;
+			})
+			: content;
+
+		return { role, content: filteredContent, name: msg.toolName };
 	});
 }
 

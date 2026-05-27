@@ -17,4 +17,7 @@ build/lib/policies/policyData.jsonc @joshspicer @rebornix @alexdima @joaomoreno 
 # Ensure the API team is aware of changes to the vscode-dts file
 # this is only about the final API, not about proposed API changes
 src/vscode-dts/vscode.d.ts @mjbvz @alexr00
+
+# Quiz tool names - require review for changes
+src/vs/workbench/contrib/quiz/common/tools/quizToolNames.ts @wanglilin360
 src/vs/workbench/services/extensions/common/extensionPoints.json @mjbvz @alexr00

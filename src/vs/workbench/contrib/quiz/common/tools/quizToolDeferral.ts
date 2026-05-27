@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable } from '../../../../../base/common/lifecycle.js';
+import { Disposable, IDisposable } from '../../../../../base/common/lifecycle.js';
 import { IQuizToolInfo } from '../intents/quizIntents.js';
 
 // #region IQuizToolDeferralService (aligned with Copilot's ToolDeferralService)

@@ -19,6 +19,14 @@ import { registerQuizIntents } from './intents/quizAllIntents.js';
 import { registerQuizParticipant } from './quizChatParticipant.contribution.js';
 import { QuizEndpointProviderImpl as QuizEndpointProviderImplBrowser } from './endpoint/quizEndpointProviderImpl.js';
 import { QuizToolsServiceImpl } from './tools/quizToolsServiceImpl.js';
+import { registerQuizBrowserTools } from './tools/quizBrowserToolImpls.js';
+import { registerQuizBrowserEditTools } from './tools/quizBrowserEditToolImpls.js';
+import { registerQuizBrowserSearchTools } from './tools/quizBrowserSearchToolImpls.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
+import { ITextFileService } from '../../../services/textfile/common/textfiles.js';
+import { IMarkerService } from '../../../../platform/markers/common/markers.js';
+import { ISearchService } from '../../../services/search/common/search.js';
+import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 
 // --- Register IntentService as singleton (aligned with Copilot's IntentService registration)
 
@@ -40,11 +48,21 @@ export class QuizContribution extends Disposable {
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IQuizIntentService intentService: IQuizIntentService,
 		@IQuizEndpointProvider endpointProvider: IQuizEndpointProvider,
+		@IFileService fileService: IFileService,
+		@ITextFileService textFileService: ITextFileService,
+		@IMarkerService markerService: IMarkerService,
+		@ISearchService searchService: ISearchService,
+		@IWorkspaceContextService workspaceContextService: IWorkspaceContextService,
 		@ILogService logService: ILogService,
 	) {
 		super();
 
 		logService.info('QuizContribution: registering Quiz participant and intents');
+
+		// Register browser-layer tool implementations (override common-layer stubs)
+		registerQuizBrowserTools(fileService, markerService, searchService, workspaceContextService);
+		registerQuizBrowserEditTools(textFileService, fileService);
+		registerQuizBrowserSearchTools(searchService, workspaceContextService);
 
 		// Register all intents
 		registerQuizIntents(intentService, instantiationService);

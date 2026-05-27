@@ -12,6 +12,8 @@ import { IQuizEndpointProvider } from '../common/endpoint/quizEndpoint.js';
 import { IQuizToolsService } from '../common/tools/quizToolsService.js';
 import { QuizConversation, QuizTurnImpl } from '../common/prompt/quizConversation.js';
 import { QuizDefaultToolCallingLoop } from '../common/prompt/quizToolCallingLoop.js';
+import { IQuizChatHookService } from '../common/prompt/quizHookService.js';
+import { IQuizSessionTranscriptService } from '../common/prompt/quizSessionTranscript.js';
 
 // --- Request handler (aligned with Copilot's DefaultIntentRequestHandler)
 
@@ -28,6 +30,8 @@ export class QuizRequestHandler extends Disposable {
 		@IQuizEndpointProvider private readonly _endpointProvider: IQuizEndpointProvider,
 		@IQuizToolsService private readonly _toolsService: IQuizToolsService,
 		@ILogService private readonly _logService: ILogService,
+		@IQuizChatHookService private readonly _hookService: IQuizChatHookService,
+		@IQuizSessionTranscriptService private readonly _transcriptService: IQuizSessionTranscriptService,
 	) {
 		super();
 		this._conversation = new QuizConversation(this._request.sessionResource.toString());
@@ -65,9 +69,11 @@ export class QuizRequestHandler extends Disposable {
 		// Run tool calling loop
 		const loop = new QuizDefaultToolCallingLoop(
 			invocation,
-			{ maxRounds: 25, endpoint, conversation, chatSessionId: this._conversation.sessionId, requestId: this._request.requestId },
+			{ toolCallLimit: 25, endpoint, conversation, chatSessionId: this._conversation.sessionId, requestId: this._request.requestId },
 			this._toolsService,
 			this._logService,
+			this._hookService,
+			this._transcriptService,
 		);
 
 		const buildPromptContext: IQuizBuildPromptContext = {

@@ -1,0 +1,7 @@
+name: quiz-vs-copilot
+description: "Compare Quiz (core contribution) vs Copilot (extension) to identify gaps"
+repos:
+  vscode-quiz:
+    path: e:\vscode-main\src\vs\workbench\contrib\quiz
+  vscode-copilot:
+    path: e:\vscode-main\extensions\copilot

@@ -5,7 +5,7 @@
 
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { IQuizToolInfo, IQuizToolDefinition } from '../intents/quizIntents.js';
-import { QuizToolCategory, QuizToolName, getQuizToolCategory } from './quizToolNames.js';
+import { QuizToolCategory, QuizToolName } from './quizToolNames.js';
 
 // #region IQuizVirtualTool (aligned with Copilot's VirtualTool)
 

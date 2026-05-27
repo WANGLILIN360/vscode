@@ -7,6 +7,8 @@
 
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { createDecorator } from '../../../../../platform/instantiation/common/instantiation.js';
+import { URI } from '../../../../../base/common/uri.js';
+import { IQuizTurn } from '../intents/quizIntents.js';
 
 export const IQuizChatSummarizerProvider = createDecorator<IQuizChatSummarizerProvider>('quizChatSummarizerProvider');
 
@@ -19,6 +21,7 @@ export interface IQuizChatSummarizerProvider {
 
 	/**
 	 * Generate a summary of the conversation history.
+	 * Aligned with Copilot's ChatSummarizerProvider.provideChatSummary.
 	 */
 	provideChatSummary(
 		context: IQuizChatSummaryContext,
@@ -26,9 +29,17 @@ export interface IQuizChatSummarizerProvider {
 	): Promise<string>;
 }
 
+/**
+ * Context for generating a conversation summary.
+ * Aligned with Copilot's ChatContext (used in summarizer.ts).
+ */
 export interface IQuizChatSummaryContext {
-	readonly history: readonly unknown[];
-	readonly sessionResource?: unknown;
+	/** The conversation turns to summarize */
+	readonly history: readonly IQuizTurn[];
+	/** The session resource URI for the conversation */
+	readonly sessionResource?: URI;
+	/** The chat session ID */
+	readonly chatSessionId?: string;
 }
 
 /**

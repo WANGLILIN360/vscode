@@ -119,3 +119,30 @@ export class QuizToolCallRound implements IQuizToolCallRound {
 // #endregion
 
 // IQuizContextManagementResponse is defined in quizIntents.ts (type definition layer)
+
+// #region QuizToolResultMetadata (aligned with Copilot's ToolResultMetadata)
+
+/**
+ * Metadata about a tool result, including timing, error info, and hook decisions.
+ * Aligned with Copilot's ToolResultMetadata (extension/intents/node/toolCallingLoop.ts).
+ */
+export interface IQuizToolResultMetadata {
+	/** The tool call ID this metadata belongs to */
+	readonly toolCallId: string;
+	/** The tool name */
+	readonly toolName: string;
+	/** Whether the tool execution was denied by a hook */
+	readonly deniedByHook?: boolean;
+	/** Whether the tool result was blocked by a post-tool-use hook */
+	readonly blockedByHook?: boolean;
+	/** Duration of tool execution in milliseconds */
+	readonly durationMs?: number;
+	/** Whether the tool execution resulted in an error */
+	readonly isError?: boolean;
+	/** The permission decision from the pre-tool-use hook */
+	readonly permissionDecision?: 'allow' | 'deny';
+	/** The permission decision reason from the hook */
+	readonly permissionDecisionReason?: string;
+}
+
+// #endregion
