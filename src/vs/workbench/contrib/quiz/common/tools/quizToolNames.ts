@@ -62,6 +62,7 @@ export enum QuizToolName {
 	CoreConfirmationToolWithOptions = 'vscode_get_confirmation_with_options',
 	CoreReviewPlan = 'vscode_reviewPlan',
 	CoreTerminalConfirmationTool = 'vscode_get_terminal_confirmation',
+	ModifiedFilesConfirmation = 'vscode_get_modified_files_confirmation',
 	SearchSubagent = 'search_subagent',
 	ExploreSubagent = 'explore_subagent',
 	CoreAskQuestions = 'vscode_askQuestions',
@@ -127,6 +128,7 @@ export enum QuizContributedToolName {
 	/** @deprecated moving to core soon */
 	RunTests = 'quiz_runTests1',
 	SwitchAgent = 'quiz_switchAgent',
+	ModifiedFilesConfirmation = 'quiz_modifiedFilesConfirmation',
 	ResolveMemoryFileUri = 'quiz_resolveMemoryFileUri',
 	SessionStoreSql = 'quiz_sessionStoreSql',
 }
@@ -282,6 +284,7 @@ export const quizToolCategories: Record<QuizToolName, QuizToolCategory> = {
 	[QuizToolName.CoreAskQuestions]: QuizToolCategory.VSCodeInteraction,
 	[QuizToolName.SwitchAgent]: QuizToolCategory.VSCodeInteraction,
 	[QuizToolName.Memory]: QuizToolCategory.VSCodeInteraction,
+	[QuizToolName.ModifiedFilesConfirmation]: QuizToolCategory.VSCodeInteraction,
 
 	// Testing
 	[QuizToolName.FindTestFiles]: QuizToolCategory.Testing,

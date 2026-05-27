@@ -16,12 +16,10 @@ import { URI } from '../../../../../base/common/uri.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
-import { IMarkerService } from '../../../../../platform/markers/common/markers.js';
 import { ISearchService, IFileQuery, QueryType } from '../../../../services/search/common/search.js';
+import { MAX_OUTPUT_LINES, MAX_LINE_LENGTH, MAX_HEXDUMP_BYTES, knownBinaryExtensions, isBinaryContent, formatHexdump } from '../../common/tools/quizBinaryUtils.js';
 
 // #region QuizReadFileToolImpl (browser-layer, aligned with Copilot's ReadFileTool)
-
-const MAX_OUTPUT_LINES = 2000;
 
 export interface IQuizReadFileInput {
 	filePath: string;
@@ -45,11 +43,11 @@ export class QuizReadFileToolImpl extends QuizBuiltinTool<IQuizReadFileInput> {
 					type: 'string',
 				},
 				offset: {
-					description: 'The 1-indexed line number to start reading from (for text files) or byte offset (for binary files).',
+					description: 'Optional: the 1-based line number to start reading from. Only use this if the file is too large to read at once. If not specified, the file will be read from the beginning.',
 					type: 'number',
 				},
 				limit: {
-					description: 'The maximum number of lines to read (for text files) or bytes to read (for binary files).',
+					description: 'Optional: the maximum number of lines to read. Only use this together with `offset` if the file is too large to read at once.',
 					type: 'number',
 				},
 			},
@@ -66,22 +64,80 @@ export class QuizReadFileToolImpl extends QuizBuiltinTool<IQuizReadFileInput> {
 		try {
 			const uri = URI.file(parameters.filePath);
 			const content = await this._fileService.readFile(uri);
+
+			// --- Binary file detection (aligned with Copilot's hexdumpIfBinary) ---
+			const extDot = uri.path.lastIndexOf('.');
+			const ext = extDot >= 0 ? uri.path.substring(extDot).toLowerCase() : '';
+			const data = content.value.buffer;
+
+			if (isBinaryContent(data) || knownBinaryExtensions.has(ext)) {
+				// Return hexdump for binary files (aligned with Copilot's BinaryFileHexdump)
+				const startByte = parameters.offset ?? 0;
+				const endByte = parameters.limit !== undefined
+					? startByte + parameters.limit
+					: startByte + MAX_HEXDUMP_BYTES;
+				const clampedEnd = Math.min(endByte, data.length, startByte + MAX_HEXDUMP_BYTES);
+				const truncated = clampedEnd < data.length;
+				const hexdump = formatHexdump(data, startByte, clampedEnd - startByte);
+
+				let result = `Binary file: ${parameters.filePath}\nTotal size: ${data.length} bytes\n`;
+				result += `Showing bytes ${startByte}-${clampedEnd}:\n\`\`\`\n${hexdump}\n\`\`\``;
+				if (truncated) {
+					result += `\n[File content truncated at byte ${clampedEnd}. Use ${QuizToolName.ReadFile} with offset/limit parameters to view more.]`;
+				}
+				return quizToolResultText(result);
+			}
+
+			// --- Text file handling ---
 			const text = content.value.toString();
+
+			// Empty file handling (aligned with Copilot's ReadFileResult)
+			if (text.length === 0) {
+				return quizToolResultText(`The file \`${parameters.filePath}\` exists, but is empty.`);
+			}
+			if (text.trim().length === 0) {
+				return quizToolResultText(`The file \`${parameters.filePath}\` exists, but contains only whitespace.`);
+			}
+
 			const lines = text.split('\n');
-			const offset = Math.max(0, (parameters.offset ?? 1) - 1);
-			const limit = parameters.limit ?? MAX_OUTPUT_LINES;
-			const selectedLines = lines.slice(offset, offset + limit);
-
-			const numberedLines = selectedLines.map((line, i) => `${offset + i + 1}: ${line}`);
-			const result = numberedLines.join('\n');
-
 			const totalLines = lines.length;
-			const showingLines = selectedLines.length;
-			const suffix = showingLines < totalLines
-				? `\n\n(showing lines ${offset + 1}-${offset + showingLines} of ${totalLines} total lines. Use offset and limit to read more.)`
-				: '';
 
-			return quizToolResultText(result + suffix);
+			// Offset validation (aligned with Copilot's getParamRanges)
+			const startLine = Math.max(1, parameters.offset ?? 1);
+			if (startLine > totalLines) {
+				return quizToolResultError(`Invalid offset ${startLine}: file only has ${totalLines} line${totalLines === 1 ? '' : 's'}. Line numbers are 1-indexed.`);
+			}
+
+			const limit = Math.min(parameters.limit ?? MAX_OUTPUT_LINES, MAX_OUTPUT_LINES);
+			const endLine = Math.min(startLine + limit, totalLines + 1);
+			const selectedLines = lines.slice(startLine - 1, endLine - 1);
+
+			// Line length truncation (aligned with Copilot's MAX_LINE_LENGTH)
+			let hadLongLines = false;
+			const numberedLines = selectedLines.map((line, i) => {
+				if (line.length > MAX_LINE_LENGTH) {
+					hadLongLines = true;
+					return `${startLine + i}: ${line.slice(0, MAX_LINE_LENGTH)} [truncated]`;
+				}
+				return `${startLine + i}: ${line}`;
+			});
+
+			let result = numberedLines.join('\n');
+
+			if (hadLongLines) {
+				result += `\n[One or more long lines were truncated at ${MAX_LINE_LENGTH} characters]`;
+			}
+
+			// Truncation hint (aligned with Copilot's truncation messaging)
+			const showingLines = selectedLines.length;
+			const truncated = endLine - 1 < totalLines;
+			if (truncated) {
+				result += `\n[File content truncated at line ${endLine - 1}. Use ${QuizToolName.ReadFile} with offset/limit parameters to view more. Total lines: ${totalLines}]`;
+			} else if (startLine > 1 || showingLines < totalLines) {
+				result += `\n\n(showing lines ${startLine}-${startLine + showingLines - 1} of ${totalLines} total lines)`;
+			}
+
+			return quizToolResultText(result);
 		} catch (err) {
 			return quizToolResultError(`Failed to read file: ${String(err)}`);
 		}
@@ -204,73 +260,6 @@ export class QuizFindFilesToolImpl extends QuizBuiltinTool<IQuizFindFilesInput> 
 
 // #endregion
 
-// #region QuizGetErrorsToolImpl (browser-layer, aligned with Copilot's GetErrorsTool)
-
-export interface IQuizGetErrorsInput {
-	filePath: string;
-	severity?: 'error' | 'warning' | 'info';
-}
-
-export class QuizGetErrorsToolImpl extends QuizBuiltinTool<IQuizGetErrorsInput> {
-
-	readonly toolName = QuizToolName.GetErrors;
-
-	readonly definition = {
-		name: QuizToolName.GetErrors,
-		description: 'Get diagnostics (errors, warnings) for a file. Returns a list of diagnostic items with severity, line number, and message. Use this to check for problems after editing a file.',
-		inputSchema: {
-			type: 'object',
-			required: ['filePath'],
-			properties: {
-				filePath: {
-					description: 'The absolute path of the file to get diagnostics for.',
-					type: 'string',
-				},
-				severity: {
-					description: 'Filter by severity level. If not specified, all diagnostics are returned.',
-					type: 'string',
-					enum: ['error', 'warning', 'info'],
-				},
-			},
-		} satisfies IQuizToolDefinition['inputSchema'],
-	};
-
-	constructor(
-		private readonly _markerService: IMarkerService,
-	) {
-		super();
-	}
-
-	override async invoke(parameters: IQuizGetErrorsInput, context: IQuizToolInvocationContext, token: CancellationToken): Promise<IQuizToolResult> {
-		try {
-			const uri = URI.file(parameters.filePath);
-			const markers = this._markerService.read({ resource: uri });
-
-			const severityMap: Record<number, string> = { 1: 'error', 2: 'warning', 3: 'info', 4: 'info' };
-			const severityFilter = parameters.severity;
-
-			const filtered = severityFilter
-				? markers.filter(m => severityMap[m.severity] === severityFilter)
-				: markers;
-
-			if (filtered.length === 0) {
-				return quizToolResultText('No diagnostics found for this file.');
-			}
-
-			const lines = filtered.map(m => {
-				const sev = severityMap[m.severity] ?? 'unknown';
-				const line = m.startLineNumber;
-				return `[${sev}] line ${line}: ${m.message}`;
-			});
-			return quizToolResultText(lines.join('\n'));
-		} catch (err) {
-			return quizToolResultError(`Failed to get errors: ${String(err)}`);
-		}
-	}
-}
-
-// #endregion
-
 // #region QuizCreateFileToolImpl (browser-layer, aligned with Copilot's CreateFileTool)
 
 export interface IQuizCreateFileInput {
@@ -310,11 +299,38 @@ export class QuizCreateFileToolImpl extends QuizBuiltinTool<IQuizCreateFileInput
 	override async invoke(parameters: IQuizCreateFileInput, context: IQuizToolInvocationContext, token: CancellationToken): Promise<IQuizToolResult> {
 		try {
 			const uri = URI.file(parameters.filePath);
+			const exists = await this._fileService.exists(uri);
+
+			// Create parent directories if needed (aligned with Copilot's createFileTool)
+			const dirUri = URI.joinPath(uri, '..');
+			try {
+				await this._fileService.createFolder(dirUri);
+			} catch {
+				// Directory may already exist
+			}
+
 			await this._fileService.writeFile(uri, VSBuffer.fromString(parameters.content));
-			return quizToolResultText(`File created successfully: ${parameters.filePath}`);
+			return quizToolResultText(exists
+				? `File overwritten: ${parameters.filePath}`
+				: `File created: ${parameters.filePath}`);
 		} catch (err) {
 			return quizToolResultError(`Failed to create file: ${String(err)}`);
 		}
+	}
+
+	override async prepareInvocation(parameters: IQuizCreateFileInput, _token: CancellationToken): Promise<{ confirmationMessages?: { title: string; message: string }; invocationMessage: string }> {
+		const uri = URI.file(parameters.filePath);
+		const exists = await this._fileService.exists(uri);
+		return {
+			confirmationMessages: exists ? {
+				title: 'Overwrite existing file?',
+				message: `File \`${parameters.filePath}\` already exists. Overwrite it?`,
+			} : {
+				title: 'Create file?',
+				message: `Create \`${parameters.filePath}\`?`,
+			},
+			invocationMessage: `Creating ${parameters.filePath}`,
+		};
 	}
 }
 
@@ -371,14 +387,13 @@ export class QuizCreateDirectoryToolImpl extends QuizBuiltinTool<IQuizCreateDire
  */
 export function registerQuizBrowserTools(
 	fileService: IFileService,
-	markerService: IMarkerService,
-	searchService: ISearchService,
-	workspaceContextService: IWorkspaceContextService,
+	_searchService: ISearchService,
+	_workspaceContextService: IWorkspaceContextService,
 ): void {
 	QuizBuiltinToolRegistry.register(new QuizReadFileToolImpl(fileService));
 	QuizBuiltinToolRegistry.register(new QuizListDirToolImpl(fileService));
-	QuizBuiltinToolRegistry.register(new QuizFindFilesToolImpl(searchService, workspaceContextService));
-	QuizBuiltinToolRegistry.register(new QuizGetErrorsToolImpl(markerService));
+	QuizBuiltinToolRegistry.register(new QuizFindFilesToolImpl(_searchService, _workspaceContextService));
 	QuizBuiltinToolRegistry.register(new QuizCreateFileToolImpl(fileService));
 	QuizBuiltinToolRegistry.register(new QuizCreateDirectoryToolImpl(fileService));
+	// Note: GetErrorsTool is registered via registerQuizBrowserWorkspaceTools
 }

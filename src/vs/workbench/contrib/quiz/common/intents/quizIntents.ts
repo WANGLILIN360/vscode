@@ -396,9 +396,16 @@ export interface IQuizToolDefinition {
 	readonly inputSchema?: object;
 }
 
+export interface IQuizToolImageData {
+	readonly base64: string;
+	readonly mimeType: string;
+}
+
 export interface IQuizToolResult {
 	readonly text?: string;
 	readonly error?: boolean;
+	/** Image data for tools that return images (e.g., ViewImage). Aligned with Copilot's LanguageModelDataPart.image. */
+	readonly imageData?: IQuizToolImageData;
 }
 
 // #endregion

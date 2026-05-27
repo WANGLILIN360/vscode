@@ -11,7 +11,7 @@ import { IQuizBuildPromptContext, IQuizIntent, IQuizIntentInvocationContext, IQu
 import { IQuizEndpointProvider } from '../common/endpoint/quizEndpoint.js';
 import { IQuizToolsService } from '../common/tools/quizToolsService.js';
 import { QuizConversation, QuizTurnImpl } from '../common/prompt/quizConversation.js';
-import { QuizDefaultToolCallingLoop } from '../common/prompt/quizToolCallingLoop.js';
+import { QuizDefaultToolCallingLoop } from './prompt/quizToolCallingLoopImpl.js';
 import { IQuizChatHookService } from '../common/prompt/quizHookService.js';
 import { IQuizSessionTranscriptService } from '../common/prompt/quizSessionTranscript.js';
 

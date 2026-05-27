@@ -7,7 +7,7 @@ import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { IQuizToolResult, IQuizToolDefinition } from '../intents/quizIntents.js';
 import { IQuizToolInvocationContext } from './quizToolsService.js';
 import { QuizToolName } from './quizToolNames.js';
-import { QuizBuiltinTool, quizToolResultText, quizToolResultError, QuizBuiltinToolRegistry } from './quizBuiltinTools.js';
+import { QuizBuiltinTool, quizToolResultText, QuizBuiltinToolRegistry } from './quizBuiltinTools.js';
 
 // #region ReadFileTool (aligned with Copilot's ReadFileTool)
 
@@ -35,11 +35,11 @@ export class QuizReadFileTool extends QuizBuiltinTool<IQuizReadFileInput> {
 					type: 'string',
 				},
 				offset: {
-					description: 'The 1-indexed line number to start reading from (for text files) or byte offset (for binary files).',
+					description: 'Optional: the 1-based line number to start reading from. Only use this if the file is too large to read at once. If not specified, the file will be read from the beginning.',
 					type: 'number',
 				},
 				limit: {
-					description: 'The maximum number of lines to read (for text files) or bytes to read (for binary files).',
+					description: 'Optional: the maximum number of lines to read. Only use this together with `offset` if the file is too large to read at once.',
 					type: 'number',
 				},
 			},
@@ -47,13 +47,10 @@ export class QuizReadFileTool extends QuizBuiltinTool<IQuizReadFileInput> {
 	};
 
 	override async invoke(parameters: IQuizReadFileInput, context: IQuizToolInvocationContext, token: CancellationToken): Promise<IQuizToolResult> {
-		try {
-			const offset = parameters.offset ?? 1;
-			const limit = parameters.limit ?? MAX_OUTPUT_LINES;
-			return quizToolResultText(`[File content of ${parameters.filePath} (lines ${offset}-${offset + limit - 1}) would be read here via IFileService]`);
-		} catch (err) {
-			return quizToolResultError(`Failed to read file: ${String(err)}`);
-		}
+		// Common-layer stub — browser/node layer provides the real implementation via IFileService
+		const offset = parameters.offset ?? 1;
+		const limit = parameters.limit ?? MAX_OUTPUT_LINES;
+		return quizToolResultText(`[Stub: File content of ${parameters.filePath} (lines ${offset}-${offset + limit - 1}) — override with browser/node layer implementation]`);
 	}
 }
 

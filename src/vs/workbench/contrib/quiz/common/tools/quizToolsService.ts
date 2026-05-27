@@ -6,6 +6,7 @@
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { Event } from '../../../../../base/common/event.js';
 import { Disposable, IDisposable } from '../../../../../base/common/lifecycle.js';
+import { URI } from '../../../../../base/common/uri.js';
 import { createDecorator } from '../../../../../platform/instantiation/common/instantiation.js';
 import { IQuizToolResult, IQuizToolInfo, IQuizToolDefinition } from '../intents/quizIntents.js';
 import { IQuizEndpoint } from '../endpoint/quizEndpoint.js';
@@ -253,6 +254,8 @@ export interface IQuizToolInvocationContext {
 	readonly chatSessionId: string;
 	readonly requestId: string;
 	readonly toolCallId: string;
+	/** URI of the chat session resource (aligned with Copilot's invocation.context.sessionResource) */
+	readonly sessionResource?: URI;
 }
 
 // #endregion

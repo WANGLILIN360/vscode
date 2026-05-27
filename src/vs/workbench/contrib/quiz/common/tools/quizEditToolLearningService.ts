@@ -3,141 +3,63 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Aligned with Copilot's tools/node/editToolLearningService.ts
+// Aligned with Copilot's tools/common/editToolLearningService.ts
+// Layer: common — contains only the interface, service identifier, and pure-logic helpers.
+// Implementation moved to browser/tools/quizEditToolLearningServiceImpl.ts to comply with
+// the four-layer architecture (common/ must not contain DI-injected classes).
 
-import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { createDecorator } from '../../../../../platform/instantiation/common/instantiation.js';
+import {
+	QuizEditTools,
+	QuizEditToolLearningState,
+	QuizEditToolLearningConfig,
+} from './quizEditToolLearningStates.js';
 
 // #region IQuizEditToolLearningService (aligned with Copilot's IEditToolLearningService)
 
 export const IQuizEditToolLearningService = createDecorator<IQuizEditToolLearningService>('quizEditToolLearningService');
 
 /**
- * Service that learns from edit tool usage patterns to improve future edits.
- * Tracks which edit strategies succeed or fail for different file types and
- * language patterns, and uses this data to suggest better edit approaches.
+ * Service that learns from edit tool usage patterns to recommend preferred edit tools.
+ * Uses a state machine with transitions based on success/failure rates,
+ * an LRU cache per model, and persistence via IStorageService.
  *
  * Aligned with Copilot's IEditToolLearningService
- * (from tools/node/editToolLearningService.ts).
+ * (from tools/common/editToolLearningService.ts).
  */
 export interface IQuizEditToolLearningService {
 	readonly _serviceBrand: undefined;
 
 	/**
-	 * Record an edit tool usage event.
-	 * @param toolName The tool that was used (e.g., insert_edit, apply_patch, replace_string)
-	 * @param filePath The file that was edited
-	 * @param languageId The language of the file
-	 * @param success Whether the edit was successful
-	 * @param strategy The edit strategy used (e.g., 'insert', 'replace', 'patch')
+	 * Get the preferred edit tools for a model family.
+	 * Returns the list of allowed tools from the current learning state,
+	 * or hardcoded preferences for known model families.
+	 * Aligned with Copilot's getPreferredEndpointEditTool.
 	 */
-	recordEditUsage(toolName: string, filePath: string, languageId: string, success: boolean, strategy: string): void;
+	getPreferredEditTools(modelFamily: string): QuizEditTools[] | undefined;
 
 	/**
-	 * Get the recommended edit strategy for a given file type and language.
-	 * Returns the strategy name with the highest success rate.
-	 * @param languageId The language of the file to edit
-	 * @returns The recommended strategy name, or undefined if no data is available
+	 * Record an edit tool usage event and update learning state.
+	 * Aligned with Copilot's didMakeEdit.
 	 */
-	getRecommendedStrategy(languageId: string): string | undefined;
-
-	/**
-	 * Get the recommended tool for a given file type and language.
-	 * Returns the tool name with the highest success rate.
-	 * @param languageId The language of the file to edit
-	 * @returns The recommended tool name, or undefined if no data is available
-	 */
-	getRecommendedTool(languageId: string): string | undefined;
+	didMakeEdit(modelId: string, modelFamily: string, tool: QuizEditTools, success: boolean): void;
 }
 
 // #endregion
 
-// #region QuizEditToolLearningServiceImpl
+// #region Storage helpers (aligned with Copilot's IStoredToolData)
+// These are pure logic (no DI) and remain in common/.
 
-/**
- * Default implementation of IQuizEditToolLearningService.
- * Tracks edit usage in memory (not persisted across sessions).
- *
- * In Copilot, this service persists data and uses more sophisticated
- * analytics. This implementation provides the same interface with
- * simple in-memory tracking.
- */
-export class QuizEditToolLearningServiceImpl extends Disposable implements IQuizEditToolLearningService {
+export const CACHE_STORAGE_KEY = 'quiz.editToolLearning.cache';
 
-	declare readonly _serviceBrand: undefined;
+export interface IStoredToolData {
+	state: QuizEditToolLearningState;
+	tools: { [K in QuizEditTools]?: { successBitset: string; attempts: number } };
+}
 
-	private readonly _usageData = new Map<string, { successes: number; failures: number; strategy: string; toolName: string }[]>();
-
-	recordEditUsage(toolName: string, filePath: string, languageId: string, success: boolean, strategy: string): void {
-		const key = languageId;
-		let entries = this._usageData.get(key);
-		if (!entries) {
-			entries = [];
-			this._usageData.set(key, entries);
-		}
-
-		const existing = entries.find(e => e.toolName === toolName && e.strategy === strategy);
-		if (existing) {
-			if (success) {
-				existing.successes++;
-			} else {
-				existing.failures++;
-			}
-		} else {
-			entries.push({
-				toolName,
-				successes: success ? 1 : 0,
-				failures: success ? 0 : 1,
-				strategy,
-			});
-		}
-	}
-
-	getRecommendedStrategy(languageId: string): string | undefined {
-		const entries = this._usageData.get(languageId);
-		if (!entries || entries.length === 0) {
-			return undefined;
-		}
-
-		// Find the entry with the highest success rate (minimum 2 uses)
-		const qualified = entries.filter(e => e.successes + e.failures >= 2);
-		if (qualified.length === 0) {
-			return undefined;
-		}
-
-		qualified.sort((a, b) => {
-			const rateA = a.successes / (a.successes + a.failures);
-			const rateB = b.successes / (b.successes + b.failures);
-			return rateB - rateA;
-		});
-
-		return qualified[0].strategy;
-	}
-
-	getRecommendedTool(languageId: string): string | undefined {
-		const entries = this._usageData.get(languageId);
-		if (!entries || entries.length === 0) {
-			return undefined;
-		}
-
-		const qualified = entries.filter(e => e.successes + e.failures >= 2);
-		if (qualified.length === 0) {
-			return undefined;
-		}
-
-		qualified.sort((a, b) => {
-			const rateA = a.successes / (a.successes + a.failures);
-			const rateB = b.successes / (b.successes + b.failures);
-			return rateB - rateA;
-		});
-
-		return qualified[0].toolName;
-	}
-
-	override dispose(): void {
-		super.dispose();
-		this._usageData.clear();
-	}
+export function addToWindow(window: bigint, bit: bigint): bigint {
+	const mask = (1n << BigInt(QuizEditToolLearningConfig.WINDOW_SIZE)) - 1n;
+	return ((window << 1n) | bit) & mask;
 }
 
 // #endregion

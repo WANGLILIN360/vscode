@@ -4,11 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 // Aligned with Copilot's prompt/node/title.ts
+// Layer: common — contains only pure-logic types, interfaces, enums, and helper functions.
+// Implementation (QuizChatTitleProvider) moved to browser/prompt/quizTitleProviderImpl.ts
+// to comply with the four-layer architecture (common/ must not contain DI-injected classes).
 
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { createDecorator } from '../../../../../platform/instantiation/common/instantiation.js';
-import { ILogService } from '../../../../../platform/log/common/log.js';
-import { IQuizEndpointProvider } from '../endpoint/quizEndpoint.js';
 import { IQuizPromptMessage, QuizPromptMessageRole } from '../intents/quizIntents.js';
 
 export const IQuizChatTitleProvider = createDecorator<IQuizChatTitleProvider>('quizChatTitleProvider');
@@ -108,60 +109,7 @@ export function quizPostProcessTitle(rawTitle: string): string | undefined {
 
 // #endregion
 
-// #region Real implementation (aligned with Copilot's ChatTitleProvider)
-
-export class QuizChatTitleProvider implements IQuizChatTitleProvider {
-	declare readonly _serviceBrand: undefined;
-
-	constructor(
-		@IQuizEndpointProvider private readonly _endpointProvider: IQuizEndpointProvider,
-		@ILogService private readonly _logService: ILogService,
-	) { }
-
-	async provideChatTitle(context: IQuizChatTitleContext, token: CancellationToken): Promise<string | undefined> {
-		// Find the first user message from history
-		const firstRequest = context.history.find(item => item.prompt);
-		if (!firstRequest) {
-			return '';
-		}
-
-		// Get the utility endpoint (aligned with Copilot's 'copilot-utility-small')
-		const endpoint = this._endpointProvider.getEndpoint('copilot-utility-small');
-		if (!endpoint) {
-			this._logService.warn('QuizChatTitleProvider: no endpoint available for title generation');
-			return '';
-		}
-
-		// Build prompt messages
-		const messages = quizBuildTitlePromptMessages(firstRequest.prompt);
-
-		// Send request to LLM
-		let fullText = '';
-		try {
-			const chunks = endpoint.sendChatRequest(messages, { debugName: 'quiz-title' }, token);
-			for await (const chunk of chunks) {
-				if (token.isCancellationRequested) {
-					return '';
-				}
-				if (chunk.text) {
-					fullText += chunk.text;
-				}
-			}
-		} catch (err) {
-			this._logService.error(`QuizChatTitleProvider: request failed — ${err}`);
-			return '';
-		}
-
-		if (token.isCancellationRequested) {
-			return '';
-		}
-
-		// Post-process the response
-		return quizPostProcessTitle(fullText);
-	}
-}
-
-// #endregion
+// #region Real implementation — moved to browser/prompt/quizTitleProviderImpl.ts
 
 // #region Null implementation
 
