@@ -4,9 +4,22 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IAuthenticationService } from '../../../../services/authentication/common/authentication.js';
-import { IQuizAuthProvider } from '../../common/auth/quizAuthProvider.js';
+import { IQuizAuthProvider, IQuizTokenClaims } from '../../common/auth/quizAuthProvider.js';
+import { Event } from '../../../../../base/common/event.js';
 
 export class QuizAuthProviderImpl implements IQuizAuthProvider {
+
+	declare _serviceBrand: undefined;
+
+	onDidChangeAuthentication = Event.None;
+
+	async refreshToken(): Promise<void> {
+		throw new Error('Method not implemented.');
+	}
+
+	getTokenClaims(): IQuizTokenClaims | undefined {
+		throw new Error('Method not implemented.');
+	}
 
 	constructor(
 		@IAuthenticationService _authService: IAuthenticationService,

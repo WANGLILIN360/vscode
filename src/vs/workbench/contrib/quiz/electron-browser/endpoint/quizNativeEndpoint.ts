@@ -6,7 +6,7 @@
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { Emitter } from '../../../../../base/common/event.js';
 import { ILogService } from '../../../../../platform/log/common/log.js';
-import { IQuizEndpoint, IQuizChatRequestOptions, IQuizResponseDelta, IQuizEndpointBody } from '../../common/endpoint/quizEndpoint.js';
+import { IQuizEndpoint, IQuizChatRequestOptions, IQuizResponseDelta, IQuizEndpointBody, IQuizEndpointInfo } from '../../common/endpoint/quizEndpoint.js';
 import { IQuizModelCapabilities } from '../../common/endpoint/quizModelCapabilities.js';
 import { IQuizPromptMessage } from '../../common/intents/quizIntents.js';
 
@@ -40,13 +40,24 @@ export class QuizNativeEndpoint implements IQuizEndpoint {
 	readonly supportsReasoningEffort: readonly string[] | undefined = undefined;
 	readonly supportsToolSearch = false;
 	readonly supportsContextEditing = false;
-	readonly supportedEditTools: readonly string[] | undefined = undefined;
+	readonly supportedEditTools: readonly import('../../common/endpoint/quizEndpoint.js').QuizEndpointEditToolName[] | undefined = undefined;
 	readonly modelMaxPromptTokens = 128000;
 	readonly maxOutputTokens = 4096;
 	readonly maxPromptImages: number | undefined = undefined;
 	readonly isPremium: boolean | undefined = undefined;
+	readonly multiplier: number | undefined = undefined;
+	readonly restrictedToSkus: readonly string[] | undefined = undefined;
 	readonly priceCategory: string | undefined = undefined;
 	readonly isFallback = true;
+	readonly tokenPricing: import('../../common/endpoint/quizEndpoint.js').IQuizEndpointTokenPricing | undefined = undefined;
+	readonly customModel: Record<string, unknown> | undefined = undefined;
+	readonly isExtensionContributed: boolean | undefined = undefined;
+	readonly showInModelPicker = true;
+	readonly degradationReason: string | undefined = undefined;
+	readonly tokenizer = 'o200k_base';
+	readonly urlOrRequestMetadata: string | import('../../common/endpoint/quizQAPIClient.js').QuizRequestMetadata | undefined = undefined;
+	readonly apiType: 'chatCompletions' | 'responses' | 'messages' | undefined = undefined;
+	readonly ownsAuthorization: boolean | undefined = undefined;
 
 	isAvailable(): boolean {
 		return !!this._endpointUrl;
@@ -61,7 +72,8 @@ export class QuizNativeEndpoint implements IQuizEndpoint {
 			supportsToolSearch: false, supportsContextEditing: false,
 			maxOutputTokens: 4096, maxInputTokens: 128000, maxPromptImages: undefined,
 			supportedEditTools: undefined, tokenizerType: 4 as import('../../common/quizTypes.js').QuizTokenizerType,
-			isPremium: undefined, priceCategory: undefined, isFallback: true,
+			isPremium: undefined, multiplier: undefined, restrictedToSkus: undefined,
+			tokenPricing: undefined, priceCategory: undefined, isFallback: true,
 		} satisfies IQuizModelCapabilities;
 	}
 
@@ -82,5 +94,28 @@ export class QuizNativeEndpoint implements IQuizEndpoint {
 
 	createRequestBody(_messages: readonly IQuizPromptMessage[], _options: IQuizChatRequestOptions): IQuizEndpointBody {
 		return { model: this.modelId, stream: true };
+	}
+
+	toEndpointInfo(): IQuizEndpointInfo {
+		return {
+			modelId: this.modelId, name: this.name, version: this.version, family: this.family,
+			vendor: this.vendor, modelProvider: this.modelProvider,
+			supportsToolCalls: this.supportsToolCalls, supportsVision: this.supportsVision,
+			supportsPrediction: this.supportsPrediction, supportsThinkingContentInHistory: this.supportsThinkingContentInHistory,
+			supportsAdaptiveThinking: this.supportsAdaptiveThinking, minThinkingBudget: this.minThinkingBudget,
+			maxThinkingBudget: this.maxThinkingBudget, supportsReasoningEffort: this.supportsReasoningEffort,
+			supportsToolSearch: this.supportsToolSearch, supportsContextEditing: this.supportsContextEditing,
+			supportedEditTools: this.supportedEditTools,
+			modelMaxPromptTokens: this.modelMaxPromptTokens, maxOutputTokens: this.maxOutputTokens,
+			maxPromptImages: this.maxPromptImages, isPremium: this.isPremium, multiplier: this.multiplier,
+			restrictedToSkus: this.restrictedToSkus, priceCategory: this.priceCategory,
+			isFallback: this.isFallback, tokenPricing: this.tokenPricing,
+			customModel: this.customModel, isExtensionContributed: this.isExtensionContributed,
+			showInModelPicker: this.showInModelPicker, degradationReason: this.degradationReason,
+			urlOrRequestMetadata: this.urlOrRequestMetadata, apiType: this.apiType,
+			ownsAuthorization: this.ownsAuthorization,
+			tokenizer: this.tokenizer,
+			isAvailable: this.isAvailable(),
+		};
 	}
 }

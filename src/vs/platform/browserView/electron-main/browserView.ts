@@ -110,7 +110,7 @@ export class BrowserView extends Disposable {
 			webviewTag: false,
 			session: this.session.electronSession,
 
-			focusOnNavigation: false
+			
 		};
 
 		this._view = new WebContentsView({

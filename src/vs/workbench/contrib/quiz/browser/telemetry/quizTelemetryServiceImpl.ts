@@ -8,6 +8,16 @@ import { IQuizTelemetryRequestParams, IQuizTelemetryService } from '../../common
 
 export class QuizTelemetryServiceImpl implements IQuizTelemetryService {
 
+	declare _serviceBrand: undefined;
+
+	reportToolInvocation(..._args: unknown[]): void {
+		// Not implemented
+	}
+
+	reportError(..._args: unknown[]): void {
+		// Not implemented
+	}
+
 	constructor(
 		@ITelemetryService private readonly _telemetryService: ITelemetryService,
 	) { }

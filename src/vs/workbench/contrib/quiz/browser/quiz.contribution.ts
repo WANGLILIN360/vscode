@@ -15,13 +15,23 @@ import { ICodeMapperService } from '../../chat/common/editing/chatCodeMapperServ
 import { WorkbenchPhase, registerWorkbenchContribution2 } from '../../../common/contributions.js';
 import { IQuizIntentService, IQuizIntentEndpoint } from '../common/intents/quizIntents.js';
 import { IQuizEndpointProvider } from '../common/endpoint/quizEndpoint.js';
+import { IQuizFetcherService } from '../common/endpoint/quizFetcher.js';
+import { IQuizQAPIClientService } from '../common/endpoint/quizQAPIClient.js';
+import { IQuizNetworkService } from '../common/endpoint/quizNetwork.js';
 import { IQuizChatTitleProvider } from '../common/prompt/quizTitle.js';
+import { IQuizChatQuotaService } from '../common/chat/quizChatTypes.js';
+import { IQuizEndpointInfoService } from '../common/quizPlatformServices.js';
 import { QuizChatTitleProvider } from './prompt/quizTitleProviderImpl.js';
 import { IQuizToolsService } from '../common/tools/quizToolsService.js';
 import { QuizIntentServiceImpl } from './intents/quizIntentService.js';
 import { registerQuizIntents } from './intents/quizAllIntents.js';
 import { registerQuizParticipant } from './quizChatParticipant.contribution.js';
 import { QuizEndpointProviderImpl as QuizEndpointProviderImplBrowser } from './endpoint/quizEndpointProviderImpl.js';
+import { QuizFetcherServiceImpl } from './endpoint/quizFetcherServiceImpl.js';
+import { QuizQAPIClientServiceImpl } from './endpoint/quizQAPIClientServiceImpl.js';
+import { QuizNetworkServiceImpl } from './endpoint/quizNetworkServiceImpl.js';
+import { QuizChatQuotaServiceImpl } from './chat/quizChatQuotaServiceImpl.js';
+import { QuizEndpointInfoServiceImpl } from './endpoint/quizEndpointInfoServiceImpl.js';
 import { QuizToolsServiceImpl } from './tools/quizToolsServiceImpl.js';
 import { registerQuizBrowserTools } from './tools/quizBrowserToolImpls.js';
 import { registerQuizBrowserEditTools } from './tools/quizBrowserEditToolImpls.js';
@@ -53,6 +63,20 @@ registerSingleton(IQuizIntentService, QuizIntentServiceImpl, InstantiationType.D
 registerSingleton(IQuizEndpointProvider, QuizEndpointProviderImplBrowser, InstantiationType.Delayed);
 registerSingleton(IQuizChatTitleProvider, QuizChatTitleProvider, InstantiationType.Delayed);
 registerSingleton(IQuizToolsService, QuizToolsServiceImpl, InstantiationType.Delayed);
+
+// --- Register QAPI networking services (aligned with Copilot's dual-path architecture)
+
+registerSingleton(IQuizFetcherService, QuizFetcherServiceImpl, InstantiationType.Delayed);
+registerSingleton(IQuizQAPIClientService, QuizQAPIClientServiceImpl, InstantiationType.Delayed);
+registerSingleton(IQuizNetworkService, QuizNetworkServiceImpl, InstantiationType.Delayed);
+
+// --- Register quota service (aligned with Copilot's ChatQuotaService)
+
+registerSingleton(IQuizChatQuotaService, QuizChatQuotaServiceImpl, InstantiationType.Delayed);
+
+// --- Register endpoint info service (aligned with Copilot's IChatEndpoint read-only subset)
+
+registerSingleton(IQuizEndpointInfoService, QuizEndpointInfoServiceImpl, InstantiationType.Delayed);
 
 // --- Quiz contribution (registers the Quiz chat participant + intents)
 

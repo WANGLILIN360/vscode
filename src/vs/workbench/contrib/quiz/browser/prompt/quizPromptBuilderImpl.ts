@@ -21,6 +21,10 @@ import {
 } from '../../common/intents/quizIntents.js';
 import { IQuizToolsService } from '../../common/tools/quizToolsService.js';
 import { IQuizPromptBuilder } from '../../common/prompt/quizPromptBuilder.js';
+import { quizTag } from '../../common/prompt/quizPromptTag.js';
+import { quizSafetyRulesForModel } from '../../common/prompt/quizPromptSafetyRules.js';
+import { quizDetectToolCapabilities, quizBuildToolDependentInstructions, quizBuildToolUseInstructions, quizBuildEditInstructions } from '../../common/prompt/quizDetectToolCapabilities.js';
+import { quizSection, quizRenderSections, quizTextChunk, quizText } from '../../common/prompt/quizPromptText.js';
 
 export class QuizPromptBuilderImpl extends Disposable implements IQuizPromptBuilder {
 
@@ -94,35 +98,72 @@ export class QuizPromptBuilderImpl extends Disposable implements IQuizPromptBuil
 		context: IQuizBuildPromptContext,
 		tools: IQuizToolInfo[],
 	): IQuizPromptMessage {
-		const parts: string[] = [];
+		const caps = quizDetectToolCapabilities(tools);
+		const modelFamily = context.tools?.modelFamily ?? '';
 
-		// Base system prompt
-		parts.push('You are an AI programming assistant. Help the user with their coding tasks.');
+		const sections = [
+			// Safety rules (aligned with Copilot's SafetyRules)
+			quizSection('safety', [quizTextChunk(quizSafetyRulesForModel(modelFamily))], { priority: 100 }),
 
-		// Mode instructions
+			// Instructions (aligned with Copilot's DefaultAgentPrompt <instructions> tag)
+			quizSection('instructions', [
+				quizTextChunk('You are a highly sophisticated automated coding agent with expert-level knowledge across many different programming languages and frameworks.'),
+				quizTextChunk('The user will ask a question, or ask you to perform a task, and it may require lots of research to answer correctly. There is a selection of tools that let you perform actions or retrieve helpful context to answer the user\'s question.'),
+				quizTextChunk('You will be given some context and attachments along with the user prompt. You can use them if they are relevant to the task, and ignore them if not.'),
+				quizTextChunk('If you can infer the project type (languages, frameworks, and libraries) from the user\'s query or the context that you have, make sure to keep them in mind when making changes.'),
+				quizTextChunk('If you aren\'t sure which tool is relevant, you can call multiple tools. You can call tools repeatedly to take actions or gather as much context as needed until you have completed the task fully. Don\'t give up unless you are sure the request cannot be fulfilled with the tools you have. It\'s YOUR RESPONSIBILITY to make sure that you have done all you can to collect necessary context.'),
+				quizTextChunk('When reading files, prefer reading large meaningful chunks rather than consecutive small sections to minimize tool calls and gain better context.'),
+				quizTextChunk('Don\'t make assumptions about the situation- gather context first, then perform the task or answer the question.'),
+				quizTextChunk('Don\'t repeat yourself after a tool call, pick up where you left off.'),
+				// Tool-dependent instructions
+				quizText(quizBuildToolDependentInstructions(caps), { priority: 1 }),
+			], { priority: 50 }),
+
+			// Tool use instructions (aligned with Copilot's <toolUseInstructions> tag)
+			quizSection('toolUseInstructions', [
+				quizTextChunk(quizBuildToolUseInstructions(caps)),
+			], { priority: 40 }),
+		];
+
+		// Edit instructions (only if editing tools are available)
+		const editInstructions = quizBuildEditInstructions(caps);
+		if (editInstructions) {
+			sections.push(quizSection('editFileInstructions', [quizTextChunk(editInstructions)], { priority: 30 }));
+		}
+
+		// Output formatting (aligned with Copilot's <outputFormatting> tag)
+		sections.push(quizSection('outputFormatting', [
+			quizTextChunk('Use proper Markdown formatting in your answers. When referring to a filename or symbol in the user\'s workspace, wrap it in backticks.'),
+			quizTextChunk(quizTag('example', 'The class `Person` is in `src/models/person.ts`.')),
+		], { priority: 20 }));
+
+		// Mode instructions (from intent)
 		if (context.modeInstructions) {
-			parts.push(context.modeInstructions);
+			sections.push(quizSection('modeInstructions', [quizTextChunk(context.modeInstructions)], { priority: 60 }));
 		}
 
 		// Additional hook context
 		if (context.additionalHookContext) {
-			parts.push(context.additionalHookContext);
+			sections.push(quizSection('hookContext', [quizTextChunk(context.additionalHookContext)], { priority: 10 }));
 		}
 
-		// Tool descriptions
+		// Tool descriptions (aligned with Copilot's tool schema rendering)
 		if (tools.length > 0) {
-			parts.push('\n# Available Tools\n');
-			for (const tool of tools) {
-				parts.push(`## ${tool.name}\n${tool.description}`);
+			const toolChunks = tools.map(tool => {
+				let desc = `## ${tool.name}\n${tool.description}`;
 				if (tool.inputSchema && Object.keys(tool.inputSchema).length > 0) {
-					parts.push(`Input schema: ${JSON.stringify(tool.inputSchema, undefined, 2)}`);
+					desc += `\nInput schema: ${JSON.stringify(tool.inputSchema, undefined, 2)}`;
 				}
-			}
+				return quizTextChunk(desc);
+			});
+			sections.push(quizSection('availableTools', toolChunks, { priority: -1 }));
 		}
+
+		const content = quizRenderSections(sections);
 
 		return {
 			role: QuizPromptMessageRole.System,
-			content: parts.join('\n\n'),
+			content,
 		};
 	}
 

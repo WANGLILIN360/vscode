@@ -600,12 +600,37 @@ export interface IQuizToolInvocationStream {
 
 // #endregion
 
-// #region Error details (aligned with vscode.ChatErrorDetails)
+// #region Error details (aligned with vscode.ChatErrorDetails / IChatResponseErrorDetails)
+
+export enum QuizErrorLevel {
+	Info = 0,
+	Warning = 1,
+	Error = 2
+}
+
+export interface IQuizErrorDetailsConfirmationButton {
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	data: any;
+	label: string;
+	isSecondary?: boolean;
+}
 
 export interface IQuizErrorDetails {
 	message: string;
 	responseIsIncomplete?: boolean;
 	responseIsFiltered?: boolean;
+	responseIsRedacted?: boolean;
+	isQuotaExceeded?: boolean;
+	isRateLimited?: boolean;
+	/**
+	 * If true, the error is an expected operational condition (e.g. user-actionable
+	 * configuration, network connectivity, missing dependency) and should not be
+	 * logged as a `chatAgentError` telemetry event.
+	 */
+	isExpectedError?: boolean;
+	level?: QuizErrorLevel;
+	confirmationButtons?: IQuizErrorDetailsConfirmationButton[];
+	code?: string;
 }
 
 // #endregion
@@ -772,6 +797,8 @@ export interface IQuizBuildPromptToolsContext {
 	readonly toolInvocationToken: unknown;
 	/** All available tools for this request */
 	readonly availableTools: readonly IQuizToolInfo[];
+	/** The model family (e.g., 'gpt-4', 'claude-3.5') — used for prompt variant selection */
+	readonly modelFamily?: string;
 	/** Subagent invocation ID, if this is a subagent request */
 	readonly subAgentInvocationId?: string;
 	/** Subagent name, if this is a subagent request */
@@ -787,12 +814,104 @@ export interface IQuizBuildPromptToolsContext {
  * an ordinary error to the user.
  */
 export class QuizIntentError extends Error {
+
+	/**
+	 * Type guard to check if an error is a QuizIntentError.
+	 */
+	public static is(error: unknown): error is QuizIntentError {
+		return error instanceof QuizIntentError;
+	}
+
+	/**
+	 * Create an error for an intent that was not found.
+	 */
+	public static intentNotFound(intentId: string): QuizIntentError {
+		return new QuizIntentError({
+			message: `Intent not found: ${intentId}`,
+			code: 'INTENT_NOT_FOUND',
+			isExpectedError: true,
+		});
+	}
+
+	/**
+	 * Create an error for a tool that was not found.
+	 */
+	public static toolNotFound(toolName: string): QuizIntentError {
+		return new QuizIntentError({
+			message: `Tool not found: ${toolName}`,
+			code: 'TOOL_NOT_FOUND',
+			isExpectedError: true,
+		});
+	}
+
+	/**
+	 * Create an error for when the user denies permission.
+	 */
+	public static notAllowed(reason?: string): QuizIntentError {
+		return new QuizIntentError({
+			message: reason ?? 'The user has denied permission for this action.',
+			code: 'NOT_ALLOWED',
+			isExpectedError: true,
+		});
+	}
+
+	/**
+	 * Create an error for rate limiting.
+	 */
+	public static rateLimited(retryAfterMs?: number): QuizIntentError {
+		return new QuizIntentError({
+			message: retryAfterMs
+				? `Rate limited. Please retry after ${retryAfterMs}ms.`
+				: 'Rate limited. Please try again later.',
+			isRateLimited: true,
+			code: 'RATE_LIMITED',
+			isExpectedError: true,
+		});
+	}
+
+	/**
+	 * Create an error for quota exceeded.
+	 */
+	public static quotaExceeded(): QuizIntentError {
+		return new QuizIntentError({
+			message: 'Quota exceeded. Usage limits have been reached.',
+			isQuotaExceeded: true,
+			code: 'QUOTA_EXCEEDED',
+			isExpectedError: true,
+		});
+	}
+
+	/**
+	 * Create an error for when the response was filtered.
+	 */
+	public static filtered(reason?: string): QuizIntentError {
+		return new QuizIntentError({
+			message: reason ?? 'The response was filtered.',
+			responseIsFiltered: true,
+			code: 'RESPONSE_FILTERED',
+			isExpectedError: true,
+		});
+	}
+
+	/**
+	 * Wrap an unknown error as a QuizIntentError.
+	 */
+	public static unknown(e: Error): QuizIntentError {
+		const quizError = new QuizIntentError({
+			message: `Unknown error: ${e.message}`,
+			code: 'INTERNAL_ERROR',
+		});
+		quizError.cause = e;
+		return quizError;
+	}
+
 	public readonly errorDetails: IQuizErrorDetails;
 
 	constructor(
 		error: string | IQuizErrorDetails,
 	) {
 		super(typeof error === 'string' ? error : error.message);
+		this.name = 'QuizIntentError';
 		this.errorDetails = typeof error === 'string' ? { message: error } : error;
 	}
 }

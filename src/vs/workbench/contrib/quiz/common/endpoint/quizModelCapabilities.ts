@@ -5,6 +5,8 @@
 
 import { ILanguageModelChatMetadata } from '../../../chat/common/languageModels.js';
 import { QuizTokenizerType } from '../quizTypes.js';
+import type { IQuizEndpointTokenPricing, QuizEndpointEditToolName } from './quizEndpoint.js';
+import { isQuizEndpointEditToolName } from './quizEndpoint.js';
 
 // #region IQuizModelCapabilities (aligned with Copilot's IChatEndpoint capabilities)
 
@@ -62,7 +64,7 @@ export interface IQuizModelCapabilities {
 
 	// --- Edit tools (aligned with Copilot's EndpointEditToolName)
 	/** Edit tools supported by this model (e.g., 'apply-patch', 'find-replace') */
-	readonly supportedEditTools: readonly string[] | undefined;
+	readonly supportedEditTools: readonly import('./quizEndpoint.js').QuizEndpointEditToolName[] | undefined;
 
 	// --- Tokenizer (aligned with Copilot's IEndpoint.tokenizer)
 	/** Tokenizer type for this model */
@@ -71,10 +73,57 @@ export interface IQuizModelCapabilities {
 	// --- Pricing (aligned with Copilot's IChatEndpointTokenPricing)
 	/** Whether this is a premium model */
 	readonly isPremium: boolean | undefined;
+	/** Billing multiplier for premium models */
+	readonly multiplier: number | undefined;
+	/** SKU restrictions for this model */
+	readonly restrictedToSkus: readonly string[] | undefined;
+	/** Normalized token pricing in AICs per million tokens */
+	readonly tokenPricing: IQuizEndpointTokenPricing | undefined;
 	/** Price category label */
 	readonly priceCategory: string | undefined;
 	/** Whether this is a fallback/utility model */
 	readonly isFallback: boolean;
+}
+
+// #endregion
+
+// #region IQuizModelCapabilityOverride (aligned with Copilot's IModelCapabilityOverride)
+
+/**
+ * Per-model capability override. Lets advanced users (and evals) alias an
+ * unknown/preview model id to a known production family for capability routing.
+ * Aligned with Copilot's IModelCapabilityOverride from chatModelCapabilities.ts.
+ *
+ * The model id on the wire is unaffected; only the local capability layer
+ * sees the alias. This flows through every family-prefix-based heuristic
+ * (Anthropic family detection, prompt resolver, multi-replace tools,
+ * tool search, context editing, extended cache TTL, etc.).
+ */
+export interface IQuizModelCapabilityOverride {
+	/**
+	 * Alias the model's family for capability routing (e.g. set to
+	 * `"claude-opus-4.7"` to make a preview model receive every Anthropic
+	 * Claude Opus 4.7 capability).
+	 */
+	readonly family?: string;
+}
+
+/**
+ * Returns the capability override (if any) for the given model id.
+ * Aligned with Copilot's getModelCapabilityOverride() from chatModelCapabilities.ts.
+ *
+ * Reads from the `quiz.modelCapabilityOverrides` setting, which lets advanced
+ * users (and evals) alias an unknown/preview model id to a known production
+ * family for capability routing.
+ *
+ * @param modelId The model identifier to look up overrides for
+ * @param overrides The override map from settings (modelId → { family?: string })
+ */
+export function getQuizModelCapabilityOverride(
+	modelId: string,
+	overrides?: Record<string, IQuizModelCapabilityOverride>,
+): IQuizModelCapabilityOverride | undefined {
+	return overrides?.[modelId];
 }
 
 // #endregion
@@ -102,9 +151,12 @@ export class QuizModelCapabilities implements IQuizModelCapabilities {
 		public readonly maxOutputTokens: number,
 		public readonly maxInputTokens: number,
 		public readonly maxPromptImages: number | undefined,
-		public readonly supportedEditTools: readonly string[] | undefined,
+		public readonly supportedEditTools: readonly import('./quizEndpoint.js').QuizEndpointEditToolName[] | undefined,
 		public readonly tokenizerType: QuizTokenizerType,
 		public readonly isPremium: boolean | undefined,
+		public readonly multiplier: number | undefined,
+		public readonly restrictedToSkus: readonly string[] | undefined,
+		public readonly tokenPricing: IQuizEndpointTokenPricing | undefined,
 		public readonly priceCategory: string | undefined,
 		public readonly isFallback: boolean,
 	) { }
@@ -113,8 +165,10 @@ export class QuizModelCapabilities implements IQuizModelCapabilities {
 	 * Create QuizModelCapabilities from VS Code's ILanguageModelChatMetadata.
 	 * Aligned with Copilot's endpoint capability resolution.
 	 */
-	static fromMetadata(modelId: string, metadata: ILanguageModelChatMetadata): QuizModelCapabilities {
-		const family = metadata.family ?? '';
+	static fromMetadata(modelId: string, metadata: ILanguageModelChatMetadata, capabilityOverrides?: Record<string, IQuizModelCapabilityOverride>): QuizModelCapabilities {
+		// Apply capability override (aligned with Copilot's ChatEndpoint constructor)
+		const capabilityOverride = getQuizModelCapabilityOverride(modelId, capabilityOverrides);
+		const family = capabilityOverride?.family ?? metadata.family ?? '';
 		const tokenizerType = inferTokenizerType(metadata.vendor, family);
 		const normalizedId = normalizeForMatch(modelId);
 		const normalizedFamily = normalizeForMatch(family);
@@ -149,11 +203,20 @@ export class QuizModelCapabilities implements IQuizModelCapabilities {
 		// Prediction: GPT-4o and newer OpenAI models
 		const supportsPrediction = family.startsWith('gpt-4o') || family.startsWith('gpt-5') || family.startsWith('o1') || family.startsWith('o3') || family.startsWith('o4');
 
-		// Edit tools: infer from family if not provided by metadata
-		const supportedEditTools = metadata.capabilities?.editTools ?? inferEditTools(family, isAnthropic, isGemini);
+		// Edit tools: infer from family if not provided by metadata, filtered to known names
+		const rawEditTools = metadata.capabilities?.editTools ?? inferEditTools(family, isAnthropic, isGemini);
+		const supportedEditTools = rawEditTools?.filter((tool): tool is QuizEndpointEditToolName => isQuizEndpointEditToolName(tool));
 
 		// Image limits: Anthropic 20, Gemini 10
 		const maxPromptImages = isAnthropic ? 20 : isGemini ? 10 : undefined;
+
+		// Pricing fields from metadata (aligned with Copilot's IModelBilling)
+		const billing = (metadata as Record<string, unknown>).billing as { is_premium?: boolean; multiplier?: number; restricted_to?: string[]; token_prices?: unknown } | undefined;
+		const isPremium = billing?.is_premium;
+		const multiplier = billing?.multiplier;
+		const restrictedToSkus = billing?.restricted_to ? Object.freeze([...billing.restricted_to]) : undefined;
+		const tokenPricing = normalizeQuizTokenPricing(billing?.token_prices as IQuizRawModelTokenPrices | undefined);
+		const priceCategory = (metadata as Record<string, unknown>).model_picker_price_category as string | undefined;
 
 		return new QuizModelCapabilities(
 			modelId,
@@ -176,9 +239,12 @@ export class QuizModelCapabilities implements IQuizModelCapabilities {
 			maxPromptImages,
 			supportedEditTools,
 			tokenizerType,
-			undefined, // isPremium — not exposed
-			undefined, // priceCategory — not exposed
-			false, // isFallback
+			isPremium,
+			multiplier,
+			restrictedToSkus,
+			tokenPricing,
+			priceCategory,
+			(metadata as Record<string, unknown>).is_chat_fallback === true, // isFallback
 		);
 	}
 
@@ -209,7 +275,7 @@ export class QuizModelCapabilities implements IQuizModelCapabilities {
 	 * Check if the model supports a specific edit tool name.
 	 */
 	supportsEditTool(editToolName: string): boolean {
-		return !!this.supportedEditTools?.includes(editToolName);
+		return !!this.supportedEditTools?.includes(editToolName as QuizEndpointEditToolName);
 	}
 }
 
@@ -290,29 +356,29 @@ export function quizModelSupportsContextEditing(normalizedId: string, normalized
 function inferEditTools(family: string, isAnthropic: boolean, isGemini: boolean): string[] | undefined {
 	const tools: string[] = [];
 
-	// Anthropic: multi_replace_string_in_file (primary) + insert_edit_into_file
+	// Anthropic: multi-find-replace (primary) + apply-patch
 	if (isAnthropic) {
-		tools.push('multi_replace_string_in_file', 'insert_edit_into_file');
+		tools.push('multi-find-replace', 'apply-patch');
 	}
-	// Gemini: replace_string_in_file (primary) + insert_edit_into_file
+	// Gemini: find-replace (primary) + apply-patch
 	else if (isGemini) {
-		tools.push('replace_string_in_file', 'insert_edit_into_file');
+		tools.push('find-replace', 'apply-patch');
 	}
-	// OpenAI GPT (non-4o): apply_patch
+	// OpenAI GPT (non-4o): apply-patch
 	else if (family.startsWith('gpt') && !family.includes('gpt-4o')) {
-		tools.push('apply_patch');
+		tools.push('apply-patch');
 	}
-	// OpenAI o4-mini: apply_patch
+	// OpenAI o4-mini: apply-patch
 	else if (family === 'o4-mini') {
-		tools.push('apply_patch');
+		tools.push('apply-patch');
 	}
-	// GPT-5.x family: apply_patch
+	// GPT-5.x family: apply-patch
 	else if (family.startsWith('gpt-5')) {
-		tools.push('apply_patch');
+		tools.push('apply-patch');
 	}
-	// Default: insert_edit_into_file as fallback
+	// Default: find-replace as fallback
 	else {
-		tools.push('insert_edit_into_file');
+		tools.push('find-replace');
 	}
 
 	return tools.length > 0 ? tools : undefined;
@@ -326,6 +392,8 @@ function inferEditTools(family: string, isAnthropic: boolean, isGemini: boolean)
  * Infer the tokenizer type from vendor and family.
  * Aligned with Copilot's endpoint tokenizer selection logic.
  */
+export { isQuizEndpointEditToolName } from './quizEndpoint.js';
+
 function inferTokenizerType(vendor: string, family: string): QuizTokenizerType {
 	if (vendor === 'copilot') {
 		// Copilot models use O200K for newer models, CL100K for older
@@ -343,6 +411,267 @@ function inferTokenizerType(vendor: string, family: string): QuizTokenizerType {
 	}
 	// Fallback for BYOK and other vendors
 	return QuizTokenizerType.CharLevel;
+}
+
+// #endregion
+
+// #region Token pricing normalization (aligned with Copilot's normalizeTokenPricing)
+
+/**
+ * Raw model token price tier from CAPI billing data.
+ * Aligned with Copilot's IModelTokenPriceTier from endpointProvider.ts.
+ */
+interface IQuizRawModelTokenPriceTier {
+	input_price: number;
+	output_price: number;
+	cache_price: number;
+	context_max?: number;
+}
+
+/**
+ * Raw model token prices from CAPI billing data.
+ * Aligned with Copilot's IModelTokenPrices from endpointProvider.ts.
+ */
+interface IQuizRawModelTokenPrices {
+	batch_size: number;
+	default: IQuizRawModelTokenPriceTier;
+	long_context?: IQuizRawModelTokenPriceTier;
+}
+
+const TOKENS_PER_MILLION = 1_000_000;
+
+/**
+ * Normalize a single raw price tier into AICs per million tokens.
+ * Aligned with Copilot's normalizePriceTier() from chatEndpoint.ts.
+ */
+function normalizePriceTier(tier: IQuizRawModelTokenPriceTier, scale: number): import('./quizEndpoint.js').IQuizTokenPriceTier {
+	return {
+		inputPrice: tier.input_price * scale,
+		outputPrice: tier.output_price * scale,
+		cacheReadTokenPrice: tier.cache_price * scale,
+		contextMax: tier.context_max,
+	};
+}
+
+/**
+ * Check if two price tiers have equal rates.
+ * Aligned with Copilot's areTierPricesEqual() from chatEndpoint.ts.
+ */
+function areTierPricesEqual(a: import('./quizEndpoint.js').IQuizTokenPriceTier, b: import('./quizEndpoint.js').IQuizTokenPriceTier): boolean {
+	return a.inputPrice === b.inputPrice
+		&& a.outputPrice === b.outputPrice
+		&& a.cacheReadTokenPrice === b.cacheReadTokenPrice;
+}
+
+/**
+ * Converts raw billing token prices into normalized AICs per million tokens.
+ * Aligned with Copilot's normalizeTokenPricing() from chatEndpoint.ts.
+ *
+ * The tiered pricing structure (default / long_context) uses AIU values
+ * directly, scaled to per-million-token rates based on batch_size.
+ * The optional long_context tier is included only when its rates differ
+ * from the default tier.
+ */
+function normalizeQuizTokenPricing(tokenPrices: IQuizRawModelTokenPrices | undefined): IQuizEndpointTokenPricing | undefined {
+	if (!tokenPrices) {
+		return undefined;
+	}
+	const scale = TOKENS_PER_MILLION / tokenPrices.batch_size;
+	const defaultTier = normalizePriceTier(tokenPrices.default, scale);
+
+	let longContext: import('./quizEndpoint.js').IQuizTokenPriceTier | undefined;
+	if (tokenPrices.long_context) {
+		const lcTier = normalizePriceTier(tokenPrices.long_context, scale);
+		if (!areTierPricesEqual(defaultTier, lcTier)) {
+			longContext = lcTier;
+		}
+	}
+
+	return {
+		default: defaultTier,
+		longContext,
+	};
+}
+
+// #endregion
+
+// #region Prompt routing helpers (aligned with Copilot's chatModelCapabilities.ts)
+
+/**
+ * Returns whether the instructions should be given in a user message instead
+ * of a system message when talking to the model.
+ * Aligned with Copilot's modelPrefersInstructionsInUserMessage().
+ */
+export function quizModelPrefersInstructionsInUserMessage(modelFamily: string): boolean {
+	return modelFamily.includes('claude-3.5-sonnet');
+}
+
+/**
+ * Returns whether the instructions should be presented after the history
+ * for the given model.
+ * Aligned with Copilot's modelPrefersInstructionsAfterHistory().
+ */
+export function quizModelPrefersInstructionsAfterHistory(modelFamily: string): boolean {
+	return modelFamily.includes('claude-3.5-sonnet');
+}
+
+/**
+ * Model supports apply_patch as an edit tool.
+ * Aligned with Copilot's modelSupportsApplyPatch().
+ */
+export function quizModelSupportsApplyPatch(family: string): boolean {
+	return (family.startsWith('gpt') && !family.includes('gpt-4o'))
+		|| family === 'o4-mini'
+		|| family.startsWith('gpt-5.2-codex')
+		|| family.startsWith('gpt-5.3-codex')
+		|| family.startsWith('gpt-5');
+}
+
+/**
+ * Model supports find-replace (replace_string_in_file) as an edit tool.
+ * Aligned with Copilot's modelSupportsReplaceString().
+ */
+export function quizModelSupportsReplaceString(family: string): boolean {
+	return isQuizGeminiFamily(family) || family.includes('grok-code') || quizModelSupportsMultiReplaceString(family) || isQuizMinimaxFamily(family);
+}
+
+/**
+ * Model supports multi-find-replace (multi_replace_string_in_file) as an edit tool.
+ * Aligned with Copilot's modelSupportsMultiReplaceString().
+ */
+export function quizModelSupportsMultiReplaceString(family: string): boolean {
+	return isQuizAnthropicFamily(family) || isQuizMinimaxFamily(family);
+}
+
+/**
+ * The model is capable of using find-replace exclusively,
+ * without needing insert_edit_into_file.
+ * Aligned with Copilot's modelCanUseReplaceStringExclusively().
+ */
+export function quizModelCanUseReplaceStringExclusively(family: string): boolean {
+	return isQuizAnthropicFamily(family) || family.includes('grok-code') || family.toLowerCase().includes('gemini-3') || isQuizMinimaxFamily(family);
+}
+
+/**
+ * We should attempt to automatically heal incorrect edits the model may emit.
+ * Aligned with Copilot's modelShouldUseReplaceStringHealing().
+ */
+export function quizModelShouldUseReplaceStringHealing(family: string): boolean {
+	return family.includes('gemini-2');
+}
+
+/**
+ * The model can accept image urls as the image_url parameter in MCP tool results.
+ * Aligned with Copilot's modelCanUseMcpResultImageURL().
+ */
+export function quizModelCanUseMcpResultImageURL(family: string): boolean {
+	return !isQuizAnthropicFamily(family);
+}
+
+/**
+ * The model supports native PDF document processing via document content parts.
+ * Aligned with Copilot's modelSupportsPDFDocuments().
+ */
+export function quizModelSupportsPDFDocuments(family: string): boolean {
+	return isQuizAnthropicFamily(family);
+}
+
+/**
+ * The model is capable of using apply_patch exclusively,
+ * without needing insert_edit_into_file.
+ * Aligned with Copilot's modelCanUseApplyPatchExclusively().
+ */
+export function quizModelCanUseApplyPatchExclusively(family: string): boolean {
+	return isQuizGpt5PlusFamily(family);
+}
+
+/**
+ * Whether, when find-replace and insert_edit tools are both available,
+ * verbiage should be added in the system prompt directing the model to prefer
+ * find-replace.
+ * Aligned with Copilot's modelNeedsStrongReplaceStringHint().
+ */
+export function quizModelNeedsStrongReplaceStringHint(family: string): boolean {
+	return isQuizGeminiFamily(family);
+}
+
+/**
+ * Model can take the simple, modern apply_patch instructions.
+ * Aligned with Copilot's modelSupportsSimplifiedApplyPatchInstructions().
+ */
+export function quizModelSupportsSimplifiedApplyPatchInstructions(family: string): boolean {
+	return isQuizGpt5PlusFamily(family);
+}
+
+/**
+ * Model prefers JSON notebook representation.
+ * Aligned with Copilot's modelPrefersJsonNotebookRepresentation().
+ */
+export function quizModelPrefersJsonNotebookRepresentation(family: string): boolean {
+	return (family.startsWith('gpt') && !family.includes('gpt-4o'))
+		|| family === 'o4-mini'
+		|| family.startsWith('gpt-5.2-codex')
+		|| family.startsWith('gpt-5.3-codex')
+		|| family.startsWith('gpt-5');
+}
+
+/**
+ * Check if a model family belongs to Minimax.
+ * Aligned with Copilot's isMinimaxFamily().
+ */
+export function isQuizMinimaxFamily(family: string): boolean {
+	return family.toLowerCase().includes('minimax');
+}
+
+/**
+ * Check if a model is GPT-5+ family.
+ * Aligned with Copilot's isGpt5PlusFamily().
+ */
+export function isQuizGpt5PlusFamily(family: string): boolean {
+	return family.startsWith('gpt-5');
+}
+
+/**
+ * Check if a model is GPT-5 codex family.
+ * Aligned with Copilot's isGptCodexFamily().
+ */
+export function isQuizGptCodexFamily(family: string): boolean {
+	return family.startsWith('gpt-') && family.includes('-codex');
+}
+
+/**
+ * GPT-5, -mini, -codex, not 5.1+.
+ * Aligned with Copilot's isGpt5Family().
+ */
+export function isQuizGpt5Family(family: string): boolean {
+	return family === 'gpt-5' || family === 'gpt-5-mini' || family === 'gpt-5-codex';
+}
+
+/**
+ * Any GPT family model.
+ * Aligned with Copilot's isGptFamily().
+ */
+export function isQuizGptFamily(family: string): boolean {
+	return family.startsWith('gpt-');
+}
+
+/**
+ * Any GPT-5.1+ model.
+ * Aligned with Copilot's isGpt51Family().
+ */
+export function isQuizGpt51Family(family: string): boolean {
+	return family.startsWith('gpt-5.1');
+}
+
+/**
+ * Returns the verbosity level for a model, taking a sync shortcut.
+ * Aligned with Copilot's getVerbosityForModelSync().
+ */
+export function getQuizVerbosityForModelSync(family: string): 'low' | 'medium' | 'high' | undefined {
+	if (family === 'gpt-5.1' || family === 'gpt-5-mini') {
+		return 'low';
+	}
+	return undefined;
 }
 
 // #endregion

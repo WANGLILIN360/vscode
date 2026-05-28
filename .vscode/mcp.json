@@ -23,6 +23,15 @@
 				"--use-daemon",
 				"-vv"
 			]
+		},
+		"gitnexus": {
+			"type": "stdio",
+			"command": "node",
+			"args": [
+				"d:/gitnexus-main/gitnexus/dist/cli/index.js",
+				"mcp"
+			],
+			"disabled": false
 		}
 	},
 	"inputs": []
